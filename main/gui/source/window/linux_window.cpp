@@ -74,7 +74,7 @@ namespace hex {
                     && FcPatternGetString(font, FC_FAMILY, 0, &fullName) != FcResultMatch) {
                     continue;
                 }
-                
+
                 registerFont(reinterpret_cast<const char *>(fullName), reinterpret_cast<const char *>(file));
             }
 
@@ -114,8 +114,10 @@ namespace hex {
 
     void Window::configureGLFW() {
         #if defined(GLFW_SCALE_FRAMEBUFFER)
-            glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_FALSE);
+            glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
         #endif
+
+        glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
@@ -123,7 +125,7 @@ namespace hex {
         glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
 
         #if defined(GLFW_WAYLAND_APP_ID)
-                glfwWindowHintString(GLFW_WAYLAND_APP_ID, "imhex");
+            glfwWindowHintString(GLFW_WAYLAND_APP_ID, "imhex");
         #endif
     }
 

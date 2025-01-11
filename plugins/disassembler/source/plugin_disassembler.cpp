@@ -15,6 +15,10 @@ using namespace hex::plugin::disasm;
 namespace hex::plugin::disasm {
 
     void drawDisassemblyVisualizer(pl::ptrn::Pattern &, bool, std::span<const pl::core::Token::Literal> arguments);
+    void registerPatternLanguageTypes();
+
+    void registerCapstoneArchitectures();
+    void registerCustomArchitectures();
 
 }
 
@@ -27,7 +31,7 @@ namespace {
     void registerPlVisualizers() {
         using ParamCount = pl::api::FunctionParameterCount;
 
-        ContentRegistry::PatternLanguage::addVisualizer("disassembler", drawDisassemblyVisualizer, ParamCount::exactly(4));
+        ContentRegistry::PatternLanguage::addVisualizer("disassembler", drawDisassemblyVisualizer, ParamCount::exactly(3));
     }
 
 }
@@ -40,4 +44,8 @@ IMHEX_PLUGIN_SETUP("Disassembler", "WerWolv", "Disassembler support") {
 
     registerViews();
     registerPlVisualizers();
+    registerPatternLanguageTypes();
+
+    registerCapstoneArchitectures();
+    registerCustomArchitectures();
 }

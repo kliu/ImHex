@@ -26,12 +26,35 @@
     #include <hex/helpers/utils_linux.hpp>
 #endif
 
-struct ImVec2;
+#include <imgui.h>
 
 namespace hex {
 
     namespace prv {
         class Provider;
+    }
+
+    template<typename T>
+    [[nodiscard]] std::vector<std::vector<T>> sampleChannels(const std::vector<T> &data, size_t count, size_t channels) {
+        if (channels == 0) return {};
+        size_t signalLength = std::max(1.0, double(data.size()) / channels);
+
+        size_t stride = std::max(1.0, double(signalLength) / count);
+
+        std::vector<std::vector<T>> result;
+        result.resize(channels);
+        for (size_t i = 0; i < channels; i++) {
+            result[i].reserve(count);
+        }
+        result.reserve(count);
+
+        for (size_t i = 0; i < data.size(); i += stride) {
+            for (size_t j = 0; j < channels; j++) {
+                result[j].push_back(data[i + j]);
+            }
+        }
+
+        return result;
     }
 
     template<typename T>
@@ -262,13 +285,13 @@ namespace hex {
 
     [[nodiscard]] float float16ToFloat32(u16 float16);
 
-    [[nodiscard]] inline bool equalsIgnoreCase(const std::string &left, const std::string &right) {
+    [[nodiscard]] inline bool equalsIgnoreCase(std::string_view left, std::string_view right) {
         return std::equal(left.begin(), left.end(), right.begin(), right.end(), [](char a, char b) {
             return tolower(a) == tolower(b);
         });
     }
 
-    [[nodiscard]] inline bool containsIgnoreCase(const std::string &a, const std::string &b) {
+    [[nodiscard]] inline bool containsIgnoreCase(std::string_view a, std::string_view b) {
         auto iter = std::search(a.begin(), a.end(), b.begin(), b.end(), [](char ch1, char ch2) {
             return std::toupper(ch1) == std::toupper(ch2);
         });
@@ -316,5 +339,7 @@ namespace hex {
      *          that is defined in the current module.
      */
     [[nodiscard]] void* getContainingModule(void* symbol);
+
+    [[nodiscard]] std::optional<ImColor> blendColors(const std::optional<ImColor> &a, const std::optional<ImColor> &b);
 
 }

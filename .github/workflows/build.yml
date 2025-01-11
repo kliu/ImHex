@@ -18,11 +18,18 @@ jobs:
   win:
     runs-on: windows-2022
     name: 🪟 Windows MINGW64
+
     defaults:
       run:
         shell: msys2 {0}
+
     env:
       CCACHE_DIR:      "${{ github.workspace }}/.ccache"
+
+    permissions:
+      id-token: write
+      attestations: write
+
     steps:
     - name: 🧰 Checkout
       uses: actions/checkout@v4
@@ -86,6 +93,12 @@ jobs:
 
         echo "ImHex checks for the existence of this file to determine if it is running in portable mode. You should not delete this file" > $PWD/install/PORTABLE
 
+    - name: 🗝️ Generate build provenance attestations
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-path: |
+          imhex-*.msi
+
     - name: ⬆️ Upload Windows Installer
       uses: actions/upload-artifact@v4
       with:
@@ -122,12 +135,16 @@ jobs:
   win-plugin-template-test:
     runs-on: windows-2022
     name: 🧪 Plugin Template Test
+
     defaults:
       run:
         shell: msys2 {0}
+
     needs: win
+
     env:
       IMHEX_SDK_PATH: "${{ github.workspace }}/out/sdk"
+
     steps:
       - name: 🧰 Checkout ImHex
         uses: actions/checkout@v4
@@ -174,7 +191,11 @@ jobs:
 
   # MacOS build
   macos:
-    runs-on: macos-12
+    runs-on: macos-13
+
+    permissions:
+      id-token: write
+      attestations: write
 
     strategy:
       fail-fast: false
@@ -185,7 +206,7 @@ jobs:
           - suffix: ""
             custom_glfw: false
 
-    name: 🍎 macOS 12.0${{ matrix.suffix }}
+    name: 🍎 macOS 13${{ matrix.suffix }}
 
     steps:
     - name: 🧰 Checkout
@@ -205,16 +226,19 @@ jobs:
         max-size: 1G
 
     - name: ⬇️ Install dependencies
+      env:
+        # Make brew not display useless errors
+        HOMEBREW_TESTS: 1
       run: |
-        brew reinstall python 2>&1 >/dev/null || true
-        brew link --overwrite python 2>&1 >/dev/null || true
-        brew bundle --no-lock --file dist/Brewfile 2>&1 >/dev/null || true
+        brew reinstall python --quiet || true
+        brew link --overwrite --quiet python 2>/dev/null || true
+        brew bundle --no-lock --quiet --file dist/Brewfile || true
         rm -rf /usr/local/Cellar/capstone
 
     - name: ⬇️ Install classic glfw
       if: ${{! matrix.custom_glfw }}
       run: |
-        brew install glfw 2>&1 >/dev/null || true
+        brew install --quiet glfw || true
 
     - name: ⬇️ Install .NET
       uses: actions/setup-dotnet@v4
@@ -255,14 +279,15 @@ jobs:
         set -x
         mkdir -p build
         cd build
-        CC=$(brew --prefix gcc@12)/bin/gcc-12                                                       \
-        CXX=$(brew --prefix gcc@12)/bin/g++-12                                                      \
+        CC=$(brew --prefix llvm)/bin/clang                                                          \
+        CXX=$(brew --prefix llvm)/bin/clang++                                                       \
         OBJC=$(brew --prefix llvm)/bin/clang                                                        \
         OBJCXX=$(brew --prefix llvm)/bin/clang++                                                    \
         PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig":"$(brew --prefix)/lib/pkgconfig"   \
         cmake -G "Ninja"                                                                            \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}                                                  \
           -DIMHEX_GENERATE_PACKAGE=ON                                                               \
+          -DIMHEX_SYSTEM_LIBRARY_PATH="$(brew --prefix llvm)/lib;$(brew --prefix llvm)/lib/unwind;$(brew --prefix llvm)/lib/c++;$(brew --prefix)/lib" \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache                                                        \
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache                                                      \
           -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache                                                     \
@@ -304,7 +329,19 @@ jobs:
         cd bundle
         ln -s /Applications Applications
         cd ..
-        hdiutil create -volname "ImHex" -srcfolder bundle -ov -format UDZO imhex-${{ env.IMHEX_VERSION }}-macOS${{ matrix.suffix }}-x86_64.dmg
+        for i in $(seq 1 10); do
+            if hdiutil create -volname "ImHex" -srcfolder bundle -ov -format UDZO imhex-${{ env.IMHEX_VERSION }}-macOS${{ matrix.suffix }}-x86_64.dmg; then
+                echo "Created dmg after ${i} attempts"
+                break
+            fi
+            sleep 10
+        done
+
+    - name: 🗝️ Generate build provenance attestations
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-path: |
+          ./*.dmg
 
     - name: ⬆️ Upload DMG
       uses: actions/upload-artifact@v4
@@ -314,10 +351,12 @@ jobs:
         path: ./*.dmg
 
   macos-arm64-build:
-    runs-on: ubuntu-22.04
-    name: 🍎 macOS 12.1 arm64
+    runs-on: ubuntu-24.04
+    name: 🍎 macOS 13 arm64
+
     outputs:
       IMHEX_VERSION: ${{ steps.build.outputs.IMHEX_VERSION }}
+
     steps:
     - name: 🧰 Checkout
       uses: actions/checkout@v4
@@ -358,11 +397,17 @@ jobs:
           gh actions-cache delete "build-macos-arm64-cache" --confirm || true
 
   macos-arm64-package:
-    runs-on: macos-12
-    name: 🍎 macOS 12.1 arm64 Packaging
+    runs-on: macos-13
+    name: 🍎 macOS 13 arm64 Packaging
     needs: macos-arm64-build
+
     env:
       IMHEX_VERSION: ${{ needs.macos-arm64-build.outputs.IMHEX_VERSION }}
+
+    permissions:
+      id-token: write
+      attestations: write
+
     steps:
       - name: ⬇️ Download artifact
         uses: actions/download-artifact@v4
@@ -403,7 +448,19 @@ jobs:
           cd bundle
           ln -s /Applications Applications
           cd ..
-          hdiutil create -volname "ImHex" -srcfolder bundle -ov -format UDZO imhex-${{ env.IMHEX_VERSION }}-macOS-arm64.dmg
+          for i in $(seq 1 10); do
+              if hdiutil create -volname "ImHex" -srcfolder bundle -ov -format UDZO imhex-${{ env.IMHEX_VERSION }}-macOS-arm64.dmg; then
+                  echo "Created dmg after ${i} attempts"
+                  break
+              fi
+              sleep 10
+          done
+
+      - name: 🗝️ Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ./*.dmg
 
       - name: ⬆️ Upload DMG
         uses: actions/upload-artifact@v4
@@ -418,15 +475,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - release_num: 22.04
-          - release_num: 24.04
+          - release_num: "24.04"
+          - release_num: "24.10"
 
     name: 🐧 Ubuntu ${{ matrix.release_num }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     container:
       image: "ubuntu:${{ matrix.release_num }}"
       options: --privileged
+
+    permissions:
+      id-token: write
+      attestations: write
 
     steps:
       - name: ⬇️ Install setup dependencies
@@ -462,7 +523,7 @@ jobs:
           git config --global --add safe.directory '*'
           mkdir -p build
           cd build
-          CC=gcc-12 CXX=g++-12 cmake -G "Ninja"                       \
+          CC=gcc-14 CXX=g++-14 cmake -G "Ninja"                       \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}                  \
             -DCMAKE_INSTALL_PREFIX="/usr"                             \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache                        \
@@ -485,8 +546,14 @@ jobs:
       - name: 📦 Bundle DEB
         run: |
           cp -r build/DEBIAN build/DebDir
-          dpkg-deb -Zgzip --build build/DebDir
+          dpkg-deb -Zzstd --build build/DebDir
           mv build/DebDir.deb imhex-${{ env.IMHEX_VERSION }}-Ubuntu-${{ matrix.release_num }}-x86_64.deb
+
+      - name: 🗝️ Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ./*.deb
 
       - name: ⬆️ Upload DEB
         uses: actions/upload-artifact@v4
@@ -497,8 +564,13 @@ jobs:
 
   # AppImage build
   appimage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: ⬇️ AppImage
+
+    permissions:
+      id-token: write
+      attestations: write
+
     steps:
       - name: 🧰 Checkout
         uses: actions/checkout@v4
@@ -523,6 +595,12 @@ jobs:
           docker buildx build . -f dist/appimage/Dockerfile --progress=plain --build-arg "BUILD_TYPE=$BUILD_TYPE" \
           --build-arg "GIT_COMMIT_HASH=$GITHUB_SHA" --build-arg "GIT_BRANCH=${GITHUB_REF##*/}" --output out
 
+      - name: 🗝️ Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/*.AppImage
+            out/*.AppImage.zsync
 
       - name: ⬆️ Upload AppImage
         uses: actions/upload-artifact@v4
@@ -541,10 +619,14 @@ jobs:
   # ArchLinux build
   archlinux-build:
     name: 🐧 ArchLinux
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     container:
       image: archlinux:base-devel
+
+    permissions:
+      id-token: write
+      attestations: write
 
     steps:
       - name: ⬇️ Update all packages
@@ -629,6 +711,12 @@ jobs:
           rm *imhex-bin-debug* # rm debug package which is created for some reason
           mv *.pkg.tar.zst imhex-${{ env.IMHEX_VERSION }}-ArchLinux-x86_64.pkg.tar.zst
 
+      - name: 🗝️ Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            build/imhex-${{ env.IMHEX_VERSION }}-ArchLinux-x86_64.pkg.tar.zst
+
       - name: ⬆️ Upload imhex-archlinux.pkg.tar.zst
         uses: actions/upload-artifact@v4
         with:
@@ -648,28 +736,45 @@ jobs:
             release_num: rawhide
             mock_config: fedora-rawhide
           - name: Fedora
+            mock_release: f41
+            release_num: 41
+            mock_config: fedora-41
+          - name: Fedora
             mock_release: f40
             release_num: 40
             mock_config: fedora-40
-          - name: Fedora
-            mock_release: f39
-            release_num: 39
-            mock_config: fedora-39
           - name: RHEL-AlmaLinux
             mock_release: epel9
             release_num: 9
             mock_config: "alma+epel-9"
 
     name: 🐧 ${{ matrix.name }} ${{ matrix.release_num }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     container:
-      image: "fedora:latest"
-      options: --privileged
+      image: "almalinux:9"
+      options: --privileged --pid=host --security-opt apparmor=unconfined
+
+    permissions:
+      id-token: write
+      attestations: write
 
     steps:
-      - name: ⬇️ Install git-core
-        run: dnf install --disablerepo="*" --enablerepo="fedora" git-core -y
+      # This, together with the `--pid=host --security-opt apparmor=unconfined` docker options is required to allow
+      # fedpkg to work inside a Docker container running on Ubuntu again.
+      # GitHub seems to have enabled AppArmor on their Ubuntu CI runners which limits Docker in ways that cause
+      # programs inside it to fail.
+      # Without this, fedpkg will throw the unhelpful error message 'Insufficient Rights'
+      # This step uses nsenter to execute commands on the host that disable AppArmor entirely.
+      - name: 🛡️ Disable AppArmor on Host
+        run: |
+          nsenter -t 1 -m -u -n -i sudo systemctl disable --now apparmor.service
+          nsenter -t 1 -m -u -n -i sudo aa-teardown || true
+          nsenter -t 1 -m -u -n -i sudo sysctl --write kernel.apparmor_restrict_unprivileged_unconfined=0
+          nsenter -t 1 -m -u -n -i sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: ⬇️ Install git-core and EPEL repo
+        run: dnf install git-core epel-release -y
 
       - name: 🧰 Checkout
         uses: actions/checkout@v4
@@ -688,8 +793,8 @@ jobs:
       - name: ⬇️ Update all packages and install dependencies
         run: |
           set -x
-          dnf upgrade --disablerepo="*" --enablerepo="fedora,updates" -y
-          dnf install --disablerepo="*" --enablerepo="fedora,updates" -y \
+          dnf upgrade -y
+          dnf install -y \
           fedpkg         \
           ccache
 
@@ -724,7 +829,7 @@ jobs:
 
       - name: 📜 Fix ccache on EL9
         if: matrix.mock_release == 'epel9'
-        run: sed -i '/\. \/opt\/rh\/gcc-toolset-12\/enable/a PATH=/usr/lib64/ccache:$PATH' $GITHUB_WORKSPACE/ImHex/dist/rpm/imhex.spec
+        run: sed -i '/\. \/opt\/rh\/gcc-toolset-14\/enable/a PATH=/usr/lib64/ccache:$PATH' $GITHUB_WORKSPACE/ImHex/dist/rpm/imhex.spec
 
       - name: 🟩 Copy spec file to build root
         run: mv $GITHUB_WORKSPACE/ImHex/dist/rpm/imhex.spec $GITHUB_WORKSPACE/imhex.spec
@@ -748,6 +853,12 @@ jobs:
         run: |
           mv $GITHUB_WORKSPACE/results_imhex/${{ env.IMHEX_VERSION }}/*/imhex-${{ env.IMHEX_VERSION }}-0.*.x86_64.rpm \
           $GITHUB_WORKSPACE/imhex-${{ env.IMHEX_VERSION }}-${{ matrix.name }}-${{ matrix.release_num }}-x86_64.rpm
+
+      - name: 🗝️ Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            imhex-${{ env.IMHEX_VERSION }}-${{ matrix.name }}-${{ matrix.release_num }}-x86_64.rpm
 
       - name: ⬆️ Upload RPM
         uses: actions/upload-artifact@v4

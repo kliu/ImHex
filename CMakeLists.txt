@@ -32,6 +32,7 @@ include("${IMHEX_BASE_FOLDER}/cmake/ide_helpers.cmake")
 # Basic compiler and cmake configurations
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_INCLUDE_DIRECTORIES_BEFORE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include("${IMHEX_BASE_FOLDER}/cmake/build_helpers.cmake")
 
 # Setup project
@@ -72,8 +73,11 @@ addPluginDirectories()
 
 # Add unit tests
 if (IMHEX_ENABLE_UNIT_TESTS)
-    enable_testing()
-    add_subdirectory(tests EXCLUDE_FROM_ALL)
+    if (NOT TARGET unit_tests)
+        enable_testing()
+        add_custom_target(unit_tests)
+        add_subdirectory(tests EXCLUDE_FROM_ALL)
+    endif ()
 endif ()
 
 # Configure more resources that will be added to the install package

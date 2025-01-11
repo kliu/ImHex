@@ -11,6 +11,7 @@
 
 #include <ui/hex_editor.hpp>
 #include <ui/pattern_drawer.hpp>
+#include <ui/visualizer_drawer.hpp>
 
 #include <filesystem>
 #include <functional>
@@ -72,7 +73,9 @@ namespace hex::plugin::builtin {
             return ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
         }
 
-    public:
+        void setPopupWindowHeight(u32 height) { m_popupWindowHeight = height; }
+        u32 getPopupWindowHeight() const { return m_popupWindowHeight; }
+
         struct VirtualFile {
             std::fs::path path;
             std::vector<u8> data;
@@ -241,6 +244,8 @@ namespace hex::plugin::builtin {
         std::map<prv::Provider*, std::function<void()>> m_sectionWindowDrawer;
 
         ui::HexEditor m_sectionHexEditor;
+        PerProvider<ui::VisualizerDrawer> m_visualizerDrawer;
+        bool m_tooltipJustOpened = false;
 
         PatternSourceCode m_sourceCode;
         PerProvider<std::vector<std::string>> m_console;
@@ -249,9 +254,14 @@ namespace hex::plugin::builtin {
         std::mutex m_logMutex;
 
         PerProvider<TextEditor::Coordinates>  m_cursorPosition;
+
+        PerProvider<TextEditor::Coordinates> m_consoleCursorPosition;
+        PerProvider<TextEditor::Selection> m_selection;
+        PerProvider<TextEditor::Selection> m_consoleSelection;
+        PerProvider<TextEditor::Breakpoints> m_breakpoints;
         PerProvider<std::optional<pl::core::err::PatternLanguageError>> m_lastEvaluationError;
         PerProvider<std::vector<pl::core::err::CompileError>> m_lastCompileError;
-        PerProvider<std::vector<const pl::core::ast::ASTNode*>> m_callStack;
+        PerProvider<const std::vector<std::unique_ptr<pl::core::ast::ASTNode>>*> m_callStack;
         PerProvider<std::map<std::string, pl::core::Token::Literal>> m_lastEvaluationOutVars;
         PerProvider<std::map<std::string, PatternVariable>> m_patternVariables;
         PerProvider<std::map<u64, pl::api::Section>> m_sections;
@@ -272,12 +282,16 @@ namespace hex::plugin::builtin {
         bool m_parentHighlightingEnabled = true;
         bool m_replaceMode = false;
         bool m_openFindReplacePopUp = false;
-
+        bool m_openGotoLinePopUp = false;
         std::map<std::fs::path, std::string> m_patternNames;
 
         ImRect m_textEditorHoverBox;
         ImRect m_consoleHoverBox;
         std::string m_focusedSubWindowName;
+        float m_popupWindowHeight = 0;
+        float m_popupWindowHeightChange = 0;
+        bool m_frPopupIsClosed = true;
+        bool m_gotoPopupIsClosed = true;
 
         static inline std::array<std::string,256> m_findHistory;
         static inline u32 m_findHistorySize = 0;
@@ -296,7 +310,8 @@ namespace hex::plugin::builtin {
 
         void drawPatternTooltip(pl::ptrn::Pattern *pattern);
 
-        void drawFindReplaceDialog(TextEditor *textEditor, std::string &findWord, bool &requestFocus, u64 &position, u64 &count, bool &updateCount, bool canReplace);
+        void drawTextEditorFindReplacePopup(TextEditor *textEditor);
+        void drawTextEditorGotoLinePopup(TextEditor *textEditor);
 
         void historyInsert(std::array<std::string, 256> &history, u32 &size, u32 &index, const std::string &value);
 
@@ -307,6 +322,7 @@ namespace hex::plugin::builtin {
 
         TextEditor *getEditorFromFocusedWindow();
         void setupFindReplace(TextEditor *editor);
+        void setupGotoLine(TextEditor *editor);
 
         void registerEvents();
         void registerMenuItems();
@@ -346,7 +362,7 @@ namespace hex::plugin::builtin {
                     });
 
                     wolv::io::File file(path, wolv::io::File::Mode::Read);
-                    hex::unused(runtime.preprocessString(file.readString(), pl::api::Source::DefaultSource));
+                    std::ignore = runtime.preprocessString(file.readString(), pl::api::Source::DefaultSource);
 
                     return m_patternNames[path];
                 },

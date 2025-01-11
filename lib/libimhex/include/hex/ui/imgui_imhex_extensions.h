@@ -79,16 +79,16 @@ namespace ImGuiExt {
         Texture(const Texture&) = delete;
         Texture(Texture&& other) noexcept;
 
-        static Texture fromImage(const ImU8 *buffer, int size, Filter filter = Filter::Nearest);
-        static Texture fromImage(std::span<const std::byte> buffer, Filter filter = Filter::Nearest);
-        static Texture fromImage(const char *path, Filter filter = Filter::Nearest);
-        static Texture fromImage(const std::fs::path &path, Filter filter = Filter::Nearest);
-        static Texture fromGLTexture(unsigned int texture, int width, int height);
-        static Texture fromBitmap(const ImU8 *buffer, int size, int width, int height, Filter filter = Filter::Nearest);
-        static Texture fromBitmap(std::span<const std::byte> buffer, int width, int height, Filter filter = Filter::Nearest);
-        static Texture fromSVG(const char *path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
-        static Texture fromSVG(const std::fs::path &path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
-        static Texture fromSVG(std::span<const std::byte> buffer, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(const ImU8 *buffer, int size, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(std::span<const std::byte> buffer, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(const char *path, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(const std::fs::path &path, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromGLTexture(unsigned int texture, int width, int height);
+         [[nodiscard]] static Texture fromBitmap(const ImU8 *buffer, int size, int width, int height, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromBitmap(std::span<const std::byte> buffer, int width, int height, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(const char *path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(const std::fs::path &path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(std::span<const std::byte> buffer, int width = 0, int height = 0, Filter filter = Filter::Nearest);
 
 
         ~Texture();
@@ -97,29 +97,25 @@ namespace ImGuiExt {
         Texture& operator=(Texture&& other) noexcept;
 
         [[nodiscard]] constexpr bool isValid() const noexcept {
-            return m_textureId != nullptr;
+            return m_textureId != 0;
         }
 
         [[nodiscard]] operator ImTextureID() const noexcept {
             return m_textureId;
         }
 
-        [[nodiscard]] operator intptr_t() const noexcept {
-            return reinterpret_cast<intptr_t>(m_textureId);
-        }
-
-        [[nodiscard]] auto getSize() const noexcept {
+        [[nodiscard]] ImVec2 getSize() const noexcept {
             return ImVec2(m_width, m_height);
         }
 
-        [[nodiscard]] constexpr auto getAspectRatio() const noexcept {
+        [[nodiscard]] constexpr float getAspectRatio() const noexcept {
             if (m_height == 0) return 1.0F;
 
             return float(m_width) / float(m_height);
         }
 
     private:
-        ImTextureID m_textureId = nullptr;
+        ImTextureID m_textureId = 0;
         int m_width = 0, m_height = 0;
     };
 
@@ -148,13 +144,13 @@ namespace ImGuiExt {
 
     bool TitleBarButton(const char *label, ImVec2 size_arg);
     bool ToolBarButton(const char *symbol, ImVec4 color);
-    bool IconButton(const char *symbol, ImVec4 color, ImVec2 size_arg = ImVec2(0, 0));
+    bool IconButton(const char *symbol, ImVec4 color, ImVec2 size_arg = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
 
     bool InputIntegerPrefix(const char* label, const char *prefix, void *value, ImGuiDataType type, const char *format, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u32 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u64 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
 
-    bool SliderBytes(const char *label, u64 *value, u64 min, u64 max, ImGuiSliderFlags flags = ImGuiSliderFlags_None);
+    bool SliderBytes(const char *label, u64 *value, u64 min, u64 max, u64 stepSize = 1, ImGuiSliderFlags flags = ImGuiSliderFlags_None);
 
     inline bool HasSecondPassed() {
         return static_cast<ImU32>(ImGui::GetTime() * 100) % 100 <= static_cast<ImU32>(ImGui::GetIO().DeltaTime * 100);
@@ -286,6 +282,7 @@ namespace ImGuiExt {
     }
 
     bool InputTextIcon(const char* label, const char *icon, std::string &buffer, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
+    bool InputTextIconHint(const char* label, const char *icon, const char *hint, std::string &buffer, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
 
     bool InputScalarCallback(const char* label, ImGuiDataType data_type, void* p_data, const char* format, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data);
 
@@ -294,12 +291,12 @@ namespace ImGuiExt {
     bool BitCheckbox(const char* label, bool* v);
 
     bool DimmedButton(const char* label, ImVec2 size = ImVec2(0, 0));
-    bool DimmedIconButton(const char *symbol, ImVec4 color, ImVec2 size = ImVec2(0, 0));
-    bool DimmedButtonToggle(const char *icon, bool *v, ImVec2 size);
+    bool DimmedIconButton(const char *symbol, ImVec4 color, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
+    bool DimmedButtonToggle(const char *icon, bool *v, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
     bool DimmedIconToggle(const char *icon, bool *v);
     bool DimmedIconToggle(const char *iconOn, const char *iconOff, bool *v);
 
-    void TextOverlay(const char *text, ImVec2 pos);
+    void TextOverlay(const char *text, ImVec2 pos, float maxWidth = -1);
 
     bool BeginBox();
     void EndBox();

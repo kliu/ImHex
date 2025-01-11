@@ -4,7 +4,7 @@
 #include <hex/api/project_file_manager.hpp>
 #include <wolv/utils/guards.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -290,7 +290,7 @@ namespace hex::plugin::builtin {
                 ImGui::SameLine();
 
                 // Draw help info for the expressions
-                ImGuiExt::HelpHover("hex.builtin.view.highlight_rules.help_text"_lang);
+                ImGuiExt::HelpHover("hex.builtin.view.highlight_rules.help_text"_lang, ICON_VS_INFO);
 
                 ImGui::PopID();
             } else {

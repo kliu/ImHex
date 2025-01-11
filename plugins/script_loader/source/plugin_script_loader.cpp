@@ -1,4 +1,4 @@
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 #include <hex/plugin.hpp>
 #include <hex/api/content_registry.hpp>
 #include <hex/api/task_manager.hpp>
@@ -32,31 +32,32 @@ namespace {
             scripts.emplace_back(&script);
     }
 
-    std::vector<const Script*> loadAllScripts() {
-        std::vector<const Script*> scripts;
+std::vector<const Script*> loadAllScripts() {
+    std::vector<const Script*> scripts;
 
-        try {
-            std::apply([&scripts](auto&&... args) {
-                (loadScript(scripts, args), ...);
-            }, s_loaders);
-        } catch (const std::exception &e) {
-            log::error("Error when loading scripts: {}", e.what());
-        }
-
-        {
-            std::vector<hex::Feature> features;
-            for (const auto &script : scripts) {
-                if (!script->background)
-                    continue;
-
-                features.emplace_back(script->name, true);
-            }
-
-            IMHEX_PLUGIN_FEATURES = features;
-        }
-
-        return scripts;
+    try {
+        std::apply([&scripts](auto&&... args) {
+            (loadScript(scripts, std::forward<decltype(args)>(args)), ...);
+        }, s_loaders);
+    } catch (const std::exception &e) {
+        log::error("Error when loading scripts: {}", e.what());
+        return {}; 
     }
+
+    std::vector<hex::Feature> features;
+    features.reserve(scripts.size()); 
+
+    for (const auto &script : scripts) {
+        if (script->background) {
+            features.emplace_back(script->name, true);
+        }
+    }
+
+    IMHEX_PLUGIN_FEATURES = std::move(features); 
+
+    return scripts;
+}
+
 
     void initializeLoader(u32 &count, auto &loader) {
         try {

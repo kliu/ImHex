@@ -3,6 +3,8 @@
 #include <hex/api/content_registry.hpp>
 #include <wolv/utils/guards.hpp>
 
+#include "imstb_textedit.h"
+
 namespace hex::plugin::builtin {
 
     ViewCommandPalette::ViewCommandPalette() : View::Special("hex.builtin.view.command_palette.name") {
@@ -65,9 +67,10 @@ namespace hex::plugin::builtin {
             if (m_moveCursorToEnd) {
                 auto textState = ImGui::GetInputTextState(ImGui::GetID("##command_input"));
                 if (textState != nullptr) {
-                    textState->Stb.cursor =
-                    textState->Stb.select_start =
-                    textState->Stb.select_end = m_commandBuffer.size();
+                    auto stb = reinterpret_cast<STB_TexteditState*>(textState->Stb);
+                    stb->cursor =
+                    stb->select_start =
+                    stb->select_end = m_commandBuffer.size();
                 }
                 m_moveCursorToEnd = false;
             }
@@ -83,11 +86,20 @@ namespace hex::plugin::builtin {
 
             // Execute the currently selected command when pressing enter
             if (ImGui::IsItemFocused() && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
+                bool closePalette = true;
                 if (!m_lastResults.empty()) {
                     auto &[displayResult, matchedCommand, callback] = m_lastResults.front();
-                    callback(matchedCommand);
+
+                    if (auto result = callback(matchedCommand); result.has_value()) {
+                        m_commandBuffer = result.value();
+                        closePalette = false;
+                        m_focusInputTextBox = true;
+                    }
                 }
-                ImGui::CloseCurrentPopup();
+
+                if (closePalette) {
+                    ImGui::CloseCurrentPopup();
+                }
             }
 
             // Focus the input text box when the popup is opened
@@ -110,11 +122,15 @@ namespace hex::plugin::builtin {
 
                     // Allow executing a command by clicking on it or selecting it with the keyboard and pressing enter
                     if (ImGui::Selectable(displayResult.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups)) {
-                        callback(matchedCommand);
+                        if (auto result = callback(matchedCommand); result.has_value())
+                            m_commandBuffer = result.value();
+
                         break;
                     }
                     if (ImGui::IsItemFocused() && (ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_KeypadEnter))) {
-                        callback(matchedCommand);
+                        if (auto result = callback(matchedCommand); result.has_value())
+                            m_commandBuffer = result.value();
+
                         break;
                     }
                 }
@@ -158,6 +174,8 @@ namespace hex::plugin::builtin {
                 this->focusInputTextBox();
                 m_commandBuffer = currCommand + " ";
                 m_lastResults = this->getCommandResults(currCommand);
+
+                return std::nullopt;
             };
 
             if (type == ContentRegistry::CommandPaletteCommands::Type::SymbolCommand) {
@@ -198,11 +216,11 @@ namespace hex::plugin::builtin {
             for (const auto &[description, callback] : queryCallback(processedInput)) {
                 if (type == ContentRegistry::CommandPaletteCommands::Type::SymbolCommand) {
                     if (auto [match, value] = MatchCommand(input, command); match != MatchType::NoMatch) {
-                        results.push_back({ hex::format("{} ({})", command, description), "", callback });
+                        results.push_back({ hex::format("{} ({})", command, description), "", [callback](auto ... args){ callback(args...); return std::nullopt; } });
                     }
                 } else if (type == ContentRegistry::CommandPaletteCommands::Type::KeywordCommand) {
                     if (auto [match, value] = MatchCommand(input, command + " "); match != MatchType::NoMatch) {
-                        results.push_back({ hex::format("{} ({})", command, description), "", callback });
+                        results.push_back({ hex::format("{} ({})", command, description), "", [callback](auto ... args){ callback(args...); return std::nullopt; } });
                     }
                 }
             }

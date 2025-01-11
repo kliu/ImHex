@@ -28,10 +28,10 @@ namespace hex::plugin::builtin {
     using namespace hex::literals;
 
     void handleVersionCommand(const std::vector<std::string> &args) {
-        hex::unused(args);
+        std::ignore = args;
 
         hex::log::print(std::string(romfs::get("logo.ans").string()),
-                   ImHexApi::System::getImHexVersion(),
+                   ImHexApi::System::getImHexVersion().get(),
                    ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash(),
                    __DATE__, __TIME__,
                    ImHexApi::System::isPortableVersion() ? "Portable" : "Installed");
@@ -40,7 +40,7 @@ namespace hex::plugin::builtin {
     }
 
     void handleHelpCommand(const std::vector<std::string> &args) {
-        hex::unused(args);
+        std::ignore = args;
 
         hex::log::print(
                 "ImHex - A Hex Editor for Reverse Engineers, Programmers and people who value their retinas when working at 3 AM.\n"
@@ -142,10 +142,10 @@ namespace hex::plugin::builtin {
             hex::log::println("Loaded plugins:");
 
             for (const auto &plugin : PluginManager::getPlugins()) {
+                if (plugin.isLibraryPlugin()) continue;
+
                 hex::log::print("- \033[1m{}\033[0m", plugin.getPluginName());
-
                 hex::log::println(" by {}", plugin.getPluginAuthor());
-
                 hex::log::println("  \033[2;3m{}\033[0m", plugin.getPluginDescription());
             }
 

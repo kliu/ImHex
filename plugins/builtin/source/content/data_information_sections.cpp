@@ -4,6 +4,7 @@
 
 #include <imgui.h>
 #include <content/helpers/diagrams.hpp>
+#include <fonts/vscode_icons.hpp>
 #include <hex/api/task_manager.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
@@ -19,7 +20,7 @@ namespace hex::plugin::builtin {
         ~InformationProvider() override = default;
 
         void process(Task &task, prv::Provider *provider, Region region) override {
-            hex::unused(task);
+            std::ignore = task;
 
             m_provider = provider;
             m_region   = region;
@@ -115,7 +116,7 @@ namespace hex::plugin::builtin {
                             ImGuiExt::TextFormatted("{}", m_dataMimeType);
                             ImGui::SameLine();
                             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                            ImGuiExt::HelpHover("hex.builtin.information_section.magic.octet_stream_warning"_lang);
+                            ImGuiExt::HelpHover("hex.builtin.information_section.magic.octet_stream_warning"_lang, ICON_VS_INFO);
                             ImGui::PopStyleVar();
                         } else {
                             ImGuiExt::TextFormatted("{}", m_dataMimeType);
@@ -180,6 +181,7 @@ namespace hex::plugin::builtin {
             m_chunkBasedEntropy.reset(m_inputChunkSize, region.getStartAddress(), region.getEndAddress(),
                 provider->getBaseAddress(), provider->getActualSize());
 
+            m_chunkBasedEntropy.enableAnnotations(m_showAnnotations);
             m_byteTypesDistribution.enableAnnotations(m_showAnnotations);
 
             // Create a handle to the file
@@ -417,11 +419,31 @@ class InformationByteRelationshipAnalysis : public ContentRegistry::DataInformat
         void drawContent() override {
             auto availableWidth = ImGui::GetContentRegionAvail().x;
 
-            ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
-            m_digram.draw({ availableWidth, availableWidth });
+            if (availableWidth > 750_scaled) {
+                availableWidth /= 2;
+                availableWidth -= ImGui::GetStyle().FramePadding.x;
 
-            ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
-            m_layeredDistribution.draw({ availableWidth, availableWidth });
+                if (ImGui::BeginTable("##RelationshipTable", 2)) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+
+                    ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
+                    m_digram.draw({ availableWidth, availableWidth });
+
+                    ImGui::TableNextColumn();
+
+                    ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
+                    m_layeredDistribution.draw({ availableWidth, availableWidth });
+
+                    ImGui::EndTable();
+                }
+            } else {
+                ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
+                m_digram.draw({ availableWidth, availableWidth });
+
+                ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
+                m_layeredDistribution.draw({ availableWidth, availableWidth });
+            }
         }
 
         void load(const nlohmann::json &data) override {
