@@ -11,6 +11,7 @@
 
 #include <set>
 #include <thread>
+#include <hex/helpers/auto_reset.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -65,7 +66,7 @@ namespace hex::plugin::builtin {
         void loadSettings(const nlohmann::json &) override {}
         [[nodiscard]] nlohmann::json storeSettings(nlohmann::json) const override { return { }; }
 
-        [[nodiscard]] std::string getTypeName() const override {
+        [[nodiscard]] UnlocalizedString getTypeName() const override {
             return "hex.builtin.provider.process_memory";
         }
 

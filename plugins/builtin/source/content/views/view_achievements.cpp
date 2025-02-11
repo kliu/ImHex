@@ -2,8 +2,9 @@
 
 #include <hex/api/content_registry.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/events/requests_gui.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <cmath>
 
@@ -30,7 +31,14 @@ namespace hex::plugin::builtin {
         });
 
         // Load settings
-        m_showPopup = ContentRegistry::Settings::read<bool>("hex.builtin.setting.interface", "hex.builtin.setting.interface.achievement_popup", true);
+        {
+            bool defaultValue = true;
+            #if defined(OS_WEB)
+                defaultValue = false;
+            #endif
+
+            m_showPopup = ContentRegistry::Settings::read<bool>("hex.builtin.setting.interface", "hex.builtin.setting.interface.achievement_popup", defaultValue);
+        }
     }
 
     ViewAchievements::~ViewAchievements() {

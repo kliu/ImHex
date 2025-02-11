@@ -38,8 +38,8 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
 </p>
 
 ## Screenshots
-![Hex editor, patterns and data information](https://github.com/WerWolv/ImHex/assets/10835354/4f358238-2d27-41aa-9015-a2c6cc3708cf)
-![Bookmarks, disassembler and data processor](https://github.com/WerWolv/ImHex/assets/10835354/183bc2cc-2439-4ded-b4c5-b140e19fc92f)
+![Hex editor, patterns and data information](https://github.com/user-attachments/assets/902a7c4c-410d-490f-999e-14c856fec027)
+![Bookmarks, data information, find view and data processor](https://github.com/user-attachments/assets/58eefa1f-31c9-4bb8-a1c1-8cdd8ddbd29f)
 
 <details>
 <summary><strong>More Screenshots</strong></summary>
@@ -319,20 +319,21 @@ To use ImHex, the following minimal system requirements need to be met.
 
 - **OS**: 
   - **Windows**: Windows 7 or higher (Windows 10/11 recommended)
-  - **macOS**: macOS 12.1 (Monterey) or higher, 
-    - Lower versions are supported, but you'll need to compile ImHex yourself
+  - **macOS**: macOS 13 (Ventura) or higher, 
+    - Lower versions should still work too, but you'll need to compile ImHex yourself. The release binaries will NOT work.
+    - The macOS build is not signed and will require you to manually allow them in the Security & Privacy settings.
   - **Linux**: "Modern" Linux. The following distributions have official releases available. Other distros are supported through the AppImage and Flatpak releases.
     - Ubuntu and Debian
     - Fedora
     - RHEL/AlmaLinux
     - Arch Linux
     - Basically any other distro will work as well when compiling ImHex from sources.
-- **CPU**: x86_64 (64 Bit)
+- **CPU**: Officially supported are x86_64 and ARM64, though any Little Endian 64 bit CPU should work.
 - **GPU**: OpenGL 3.0 or higher 
   - Integrated Intel HD iGPUs are supported, however certain drivers are known to cause various graphical artifacts, especially on Windows. Use at your own risk.
   - In case you don't have a GPU available, there are software rendered releases available for Windows and macOS
-- **RAM**: 256MB, more may be required for more complicated analysis
-- **Storage**: 150MB
+- **RAM**: ~150MiB, more is required for more complex analysis
+- **Storage**: 150MiB
 
 ## Installing
 
@@ -341,8 +342,10 @@ Information on how to install ImHex can be found in the [Install](/INSTALL.md) g
 ## Compiling
 
 To compile ImHex on any platform, GCC (or Clang) is required with a version that supports C++23 or higher. 
-On macOS, Clang is also required to compile some ObjC code.
-All releases are being built using latest available GCC.
+Windows and Linux releases are being built using latest available GCC.
+MacOS releases are being built using latest available LLVM Clang.
+
+Important to note is, the MSVC and AppleClang compilers are both **NOT** supported since they're both generally severely outdated and lack features GCC and LLVM Clang have.
 
 > [!NOTE]
 > Many dependencies are bundled into the repository using submodules so make sure to clone it using the `--recurse-submodules` option.

@@ -6,8 +6,9 @@
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/events/requests_gui.hpp>
 
-#include <popups/popup_question.hpp>
+#include <banners/banner_button.hpp>
 #include <toasts/toast_notification.hpp>
 
 #include <hex/helpers/utils.hpp>
@@ -180,13 +181,13 @@ namespace hex::plugin::builtin {
         FileProvider::MenuEntry loadMenuItem;
 
         if (m_loadedIntoMemory)
-            loadMenuItem = { "hex.builtin.provider.file.menu.direct_access"_lang, [this] { this->convertToDirectAccess(); } };
+            loadMenuItem = { "hex.builtin.provider.file.menu.direct_access"_lang, ICON_VS_ARROW_SWAP, [this] { this->convertToDirectAccess(); } };
         else
-            loadMenuItem = { "hex.builtin.provider.file.menu.into_memory"_lang, [this] { this->convertToMemoryFile(); } };
+            loadMenuItem = { "hex.builtin.provider.file.menu.into_memory"_lang, ICON_VS_ARROW_SWAP, [this] { this->convertToMemoryFile(); } };
 
         return {
-            { "hex.builtin.provider.file.menu.open_folder"_lang, [this] { fs::openFolderWithSelectionExternal(m_path); } },
-            { "hex.builtin.provider.file.menu.open_file"_lang,   [this] { fs::openFileExternal(m_path); } },
+            { "hex.builtin.provider.file.menu.open_folder"_lang, ICON_VS_FOLDER_OPENED, [this] { fs::openFolderWithSelectionExternal(m_path); } },
+            { "hex.builtin.provider.file.menu.open_file"_lang,   ICON_VS_FILE, [this] { fs::openFileExternal(m_path); } },
             loadMenuItem
         };
     }
@@ -202,8 +203,10 @@ namespace hex::plugin::builtin {
         size_t fileSize = 0x00;
         {
             wolv::io::File file(m_path, wolv::io::File::Mode::Read);
-            if (!file.isValid())
+            if (!file.isValid()) {
+                this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), formatSystemError(file.getOpenError().value_or(0))));
                 return false;
+            }
 
             fileSize = file.getSize();
         }
@@ -214,11 +217,7 @@ namespace hex::plugin::builtin {
         if (result && directAccess) {
             m_writable = false;
 
-            ui::PopupQuestion::open("hex.builtin.provider.file.too_large"_lang,
-            [this] {
-                m_writable = false;
-            },
-            [this] {
+            ui::BannerButton::open(ICON_VS_WARNING, "hex.builtin.provider.file.too_large", ImColor(135, 116, 66), "hex.builtin.provider.file.too_large.allow_write", [this]{
                 m_writable = true;
                 RequestUpdateWindowTitle::post();
             });
@@ -231,11 +230,6 @@ namespace hex::plugin::builtin {
         m_readable = true;
         m_writable = true;
 
-        if (!wolv::io::fs::exists(m_path)) {
-            this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), ::strerror(ENOENT)));
-            return false;
-        }
-
         wolv::io::File file(m_path, wolv::io::File::Mode::Write);
         if (!file.isValid()) {
             m_writable = false;
@@ -243,7 +237,7 @@ namespace hex::plugin::builtin {
             file = wolv::io::File(m_path, wolv::io::File::Mode::Read);
             if (!file.isValid()) {
                 m_readable = false;
-                this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), ::strerror(errno)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), formatSystemError(file.getOpenError().value_or(0))));
                 return false;
             }
 
@@ -284,6 +278,8 @@ namespace hex::plugin::builtin {
             }
         }
 
+        m_changeEventAcknowledgementPending = false;
+
         return true;
     }
 
@@ -315,7 +311,7 @@ namespace hex::plugin::builtin {
                 fullPath = path;
 
             if (!wolv::io::fs::exists(fullPath)) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), ::strerror(ENOENT)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_path.string(), formatSystemError(ENOENT)));
             }
 
             path = std::move(fullPath);
@@ -371,14 +367,11 @@ namespace hex::plugin::builtin {
         }
 
         m_changeEventAcknowledgementPending = true;
-
-        ui::PopupQuestion::open("hex.builtin.provider.file.reload_changes"_lang, [this] {
+        ui::BannerButton::open(ICON_VS_INFO, "hex.builtin.provider.file.reload_changes", ImColor(66, 104, 135), "hex.builtin.provider.file.reload_changes.reload", [this] {
             this->close();
             (void)this->open(!m_loadedIntoMemory);
+
             getUndoStack().reapply();
-            m_changeEventAcknowledgementPending = false;
-        },
-        [this]{
             m_changeEventAcknowledgementPending = false;
         });
     }

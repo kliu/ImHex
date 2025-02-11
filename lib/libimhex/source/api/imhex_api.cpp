@@ -1,6 +1,13 @@
 #include <hex/api/imhex_api.hpp>
 
-#include <hex/api/event_manager.hpp>
+#include <hex/api/events/events_provider.hpp>
+#include <hex/api/events/events_lifecycle.hpp>
+#include <hex/api/events/events_gui.hpp>
+#include <hex/api/events/requests_interaction.hpp>
+#include <hex/api/events/requests_lifecycle.hpp>
+#include <hex/api/events/requests_provider.hpp>
+#include <hex/api/events/requests_gui.hpp>
+
 #include <hex/api/task_manager.hpp>
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/utils.hpp>
@@ -11,6 +18,7 @@
 #include <wolv/utils/string.hpp>
 
 #include <utility>
+#include <numeric>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -18,11 +26,18 @@
 #include <algorithm>
 #include <GLFW/glfw3.h>
 
+#include <hex/helpers/utils_macos.hpp>
+
 #if defined(OS_WINDOWS)
     #include <windows.h>
+    #include <DSRole.h>
 #else
     #include <sys/utsname.h>
     #include <unistd.h>
+#endif
+
+#if defined(OS_WEB)
+    #include <emscripten.h>
 #endif
 
 namespace hex {
@@ -447,7 +462,7 @@ namespace hex {
             if (s_providers->empty())
                 EventProviderChanged::post(provider, nullptr);
 
-            EventProviderClosed::post(it->get());
+            EventProviderClosed::post(providerToRemove);
             RequestUpdateWindowTitle::post();
 
             // Do the destruction of the provider in the background once all tasks have finished
@@ -559,13 +574,22 @@ namespace hex {
                 return s_windowResizable;
             }
 
-            static std::vector<hex::impl::AutoResetBase*> s_autoResetObjects;
+            static auto& getAutoResetObjects() {
+                static std::set<hex::impl::AutoResetBase*> autoResetObjects;
+
+                return autoResetObjects;
+            }
+
             void addAutoResetObject(hex::impl::AutoResetBase *object) {
-                s_autoResetObjects.emplace_back(object);
+                getAutoResetObjects().insert(object);
+            }
+
+            void removeAutoResetObject(hex::impl::AutoResetBase *object) {
+                getAutoResetObjects().erase(object);
             }
 
             void cleanup() {
-                for (const auto &object : s_autoResetObjects)
+                for (const auto &object : getAutoResetObjects())
                     object->reset();
             }
 
@@ -608,6 +632,28 @@ namespace hex {
             return impl::s_nativeScale;
         }
 
+        float getBackingScaleFactor() {
+            #if defined(OS_WINDOWS)
+                return 1.0F;
+            #elif defined(OS_MACOS)
+                return ::getBackingScaleFactor();
+            #elif defined(OS_LINUX)
+                const auto sessionType = hex::getEnvironmentVariable("XDG_SESSION_TYPE");
+                if (!sessionType.has_value() || sessionType == "x11")
+                    return 1.0F;
+                else {
+                    float xScale = 0, yScale = 0;
+                    glfwGetMonitorContentScale(glfwGetPrimaryMonitor(), &xScale, &yScale);
+
+                    return std::midpoint(xScale, yScale);
+                }
+            #elif defined(OS_WEB)
+                return 1.0F;
+            #else
+                return 1.0F;
+            #endif
+        }
+
 
         ImVec2 getMainWindowPosition() {
             if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != ImGuiConfigFlags_None)
@@ -643,6 +689,14 @@ namespace hex {
 
         void* getLibImHexModuleHandle() {
             return hex::getContainingModule(reinterpret_cast<void*>(&getLibImHexModuleHandle));
+        }
+
+        void addMigrationRoutine(SemanticVersion migrationVersion, std::function<void()> function) {
+            EventImHexUpdated::subscribe([migrationVersion, function](const SemanticVersion &oldVersion, const SemanticVersion &newVersion) {
+                if (oldVersion < migrationVersion && newVersion >= migrationVersion) {
+                    function();
+                }
+            });
         }
 
 
@@ -687,6 +741,27 @@ namespace hex {
 
         const std::string &getGLRenderer() {
             return impl::s_glRenderer;
+        }
+
+        bool isCorporateEnvironment() {
+            #if defined(OS_WINDOWS)
+                {
+                    DSROLE_PRIMARY_DOMAIN_INFO_BASIC * info;
+                    if ((DsRoleGetPrimaryDomainInformation(NULL, DsRolePrimaryDomainInfoBasic, (PBYTE *)&info) == ERROR_SUCCESS) && (info != nullptr))
+                    {
+                        bool result = std::wstring(info->DomainNameFlat).empty();
+                        DsRoleFreeMemory(info);
+
+                        return result;
+                    } else {
+                        DWORD size = 1024;
+                        ::GetComputerNameExA(ComputerNameDnsDomain, nullptr, &size);
+                        return size > 0;
+                    }
+                }
+            #else
+                return false;
+            #endif
         }
 
         bool isPortableVersion() {
@@ -794,16 +869,11 @@ namespace hex {
             return { { name, version } };
         }
 
-        std::string getImHexVersion(bool withBuildType) {
+        SemanticVersion getImHexVersion() {
             #if defined IMHEX_VERSION
-                if (withBuildType) {
-                    return IMHEX_VERSION;
-                } else {
-                    auto version = std::string(IMHEX_VERSION);
-                    return version.substr(0, version.find('-'));
-                }
+                return SemanticVersion(IMHEX_VERSION);
             #else
-                return "Unknown";
+                return {};
             #endif
         }
 
@@ -815,7 +885,7 @@ namespace hex {
                     return std::string(GIT_COMMIT_HASH_LONG).substr(0, 7);
                 }
             #else
-                hex::unused(longHash);
+                std::ignore = longHash;
                 return "Unknown";
             #endif
         }
@@ -837,7 +907,7 @@ namespace hex {
         }
 
         bool isNightlyBuild() {
-            return getImHexVersion(false).ends_with("WIP");
+            return getImHexVersion().nightly();
         }
 
         bool updateImHex(UpdateType updateType) {
@@ -935,11 +1005,6 @@ namespace hex {
                 return *s_fonts;
             }
 
-            static AutoReset<std::fs::path> s_customFontPath;
-            void setCustomFontPath(const std::fs::path &path) {
-                s_customFontPath = path;
-            }
-
             static float s_fontSize = DefaultFontSize;
             void setFontSize(float size) {
                 s_fontSize = size;
@@ -957,6 +1022,10 @@ namespace hex {
                 s_italicFont = italic;
             }
 
+            static AutoReset<std::map<UnlocalizedString, ImFont*>> s_fontDefinitions;
+            std::map<UnlocalizedString, ImFont*>& getFontDefinitions() {
+                return *s_fontDefinitions;
+            }
 
         }
 
@@ -1021,16 +1090,20 @@ namespace hex {
             });
         }
 
-        const std::fs::path& getCustomFontPath() {
-            return impl::s_customFontPath;
-        }
-
         float getFontSize() {
             return impl::s_fontSize;
         }
 
         ImFontAtlas* getFontAtlas() {
             return impl::s_fontAtlas;
+        }
+
+        void registerFont(const UnlocalizedString &fontName) {
+            (*impl::s_fontDefinitions)[fontName] = nullptr;
+        }
+
+        ImFont* getFont(const UnlocalizedString &fontName) {
+            return (*impl::s_fontDefinitions)[fontName];
         }
 
         ImFont* Bold() {

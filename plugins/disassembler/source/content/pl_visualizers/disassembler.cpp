@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <capstone/capstone.h>
+#include <content/helpers/disassembler.hpp>
 
 #include <hex/ui/imgui_imhex_extensions.h>
 #include <hex/api/localization_manager.hpp>
@@ -23,19 +24,18 @@ namespace hex::plugin::disasm {
         if (shouldReset) {
             auto pattern  = arguments[0].toPattern();
             auto baseAddress  = arguments[1].toUnsigned();
-            auto architecture = arguments[2].toUnsigned();
-            auto mode         = arguments[3].toUnsigned();
+            const auto [arch, mode] = CapstoneDisassembler::stringToSettings(arguments[2].toString());
 
             disassembly.clear();
 
             csh capstone;
-            if (cs_open(static_cast<cs_arch>(architecture), static_cast<cs_mode>(mode), &capstone) == CS_ERR_OK) {
+            if (cs_open(arch, mode, &capstone) == CS_ERR_OK) {
                 cs_option(capstone, CS_OPT_SKIPDATA, CS_OPT_ON);
 
                 auto data = pattern->getBytes();
                 cs_insn *instructions = nullptr;
 
-                size_t instructionCount = cs_disasm(capstone, data.data(), data.size(), baseAddress, 0, &instructions);
+                size_t instructionCount = cs_disasm(capstone, data.data(), data.size(), u64(baseAddress), 0, &instructions);
                 for (size_t i = 0; i < instructionCount; i++) {
                     disassembly.push_back({ instructions[i].address, { instructions[i].bytes, instructions[i].bytes + instructions[i].size }, hex::format("{} {}", instructions[i].mnemonic, instructions[i].op_str) });
                 }

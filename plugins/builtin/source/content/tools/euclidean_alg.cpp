@@ -2,7 +2,7 @@
 
 #include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <numeric>
 
@@ -54,8 +54,8 @@ namespace hex::plugin::builtin {
 
                     overflow = true;
                 } else {
-                    gcdResult       = std::gcd<i128, i128>(a, b);
-                    lcmResult       = std::lcm<i128, i128>(a, b);
+                    gcdResult       = std::gcd<i64, i64>(a, b);
+                    lcmResult       = std::lcm<i64, i64>(a, b);
                     std::tie(p, q)  = extendedGcd(a, b);
 
                     overflow = false;

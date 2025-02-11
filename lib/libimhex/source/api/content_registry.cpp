@@ -1,5 +1,6 @@
 #include <hex/api/content_registry.hpp>
 #include <hex/api/shortcut_manager.hpp>
+#include <hex/api/events/requests_provider.hpp>
 
 #include <hex/helpers/fs.hpp>
 #include <hex/helpers/logger.hpp>
@@ -32,11 +33,39 @@ namespace hex {
         namespace impl {
 
             struct OnChange {
-                u32 id;
+                u64 id;
                 OnChangeCallback callback;
             };
 
             static AutoReset<std::map<std::string, std::map<std::string, std::vector<OnChange>>>> s_onChangeCallbacks;
+
+            static void runAllOnChangeCallbacks() {
+                for (const auto &[category, rest] : *impl::s_onChangeCallbacks) {
+                    for (const auto &[name, callbacks] : rest) {
+                        for (const auto &[id, callback] : callbacks) {
+                            try {
+                                callback(getSetting(category, name, {}));
+                            } catch (const std::exception &e) {
+                                log::error("Failed to load setting [{}/{}]: {}", category, name, e.what());
+                            }
+                        }
+                    }
+                }
+            }
+
+            void runOnChangeHandlers(const UnlocalizedString &unlocalizedCategory, const UnlocalizedString &unlocalizedName, const nlohmann::json &value) {
+                if (auto categoryIt = s_onChangeCallbacks->find(unlocalizedCategory); categoryIt != s_onChangeCallbacks->end()) {
+                    if (auto nameIt = categoryIt->second.find(unlocalizedName); nameIt != categoryIt->second.end()) {
+                        for (const auto &[id, callback] : nameIt->second) {
+                            try {
+                                callback(value);
+                            } catch (const nlohmann::json::exception &e) {
+                                log::error("Failed to run onChange handler for setting {}/{}: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
+                            }
+                        }
+                    }
+                }
+            }
 
             static AutoReset<nlohmann::json> s_settings;
             const nlohmann::json& getSettingsData() {
@@ -72,24 +101,28 @@ namespace hex {
                         s_settings = nlohmann::json::parse(data);
                     }
 
-                    for (const auto &[category, rest] : *impl::s_onChangeCallbacks) {
-                        for (const auto &[name, callbacks] : rest) {
-                            for (const auto &[id, callback] : callbacks) {
-                                try {
-                                    callback(getSetting(category, name, {}));
-                                } catch (const std::exception &e) {
-                                    log::error("Failed to load setting [{}/{}]: {}", category, name, e.what());
-                                }
-                            }
-                        }
-                    }
+                    runAllOnChangeCallbacks();
                 }
 
                 void store() {
-                    auto data = s_settings->dump();
+                    if (!s_settings.isValid())
+                        return;
+
+                    const auto &settingsData = *s_settings;
+
+                    // During a crash settings can be empty, causing them to be overwritten.
+                    if (settingsData.empty()) {
+                        return;
+                    }
+
+                    const auto result = settingsData.dump(4);
+                    if (result.empty()) {
+                        return;
+                    }
+
                     MAIN_THREAD_EM_ASM({
                         localStorage.setItem("config", UTF8ToString($0));
-                    }, data.c_str());
+                    }, result.c_str());
                 }
 
                 void clear() {
@@ -115,17 +148,7 @@ namespace hex {
                     if (!loaded)
                         store();
 
-                    for (const auto &[category, rest] : *impl::s_onChangeCallbacks) {
-                        for (const auto &[name, callbacks] : rest) {
-                            for (const auto &[id, callback] : callbacks) {
-                                try {
-                                    callback(getSetting(category, name, {}));
-                                } catch (const std::exception &e) {
-                                    log::error("Failed to load setting [{}/{}]: {}", category, name, e.what());
-                                }
-                            }
-                        }
-                    }
+                    runAllOnChangeCallbacks();
                 }
 
                 void store() {
@@ -135,7 +158,7 @@ namespace hex {
                     const auto &settingsData = *s_settings;
 
                     // During a crash settings can be empty, causing them to be overwritten.
-                    if (settingsData.empty()) {
+                    if (s_settings->empty()) {
                         return;
                     }
 
@@ -191,26 +214,25 @@ namespace hex {
                 const auto entry       = insertOrGetEntry(subCategory->entries,    unlocalizedName);
 
                 entry->widget = std::move(widget);
+                if (entry->widget != nullptr) {
+                    onChange(unlocalizedCategory, unlocalizedName, [widget = entry->widget.get(), unlocalizedCategory, unlocalizedName](const SettingsValue &) {
+                        try {
+                            auto defaultValue = widget->store();
+                            widget->load(ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue));
+                            widget->onChanged();
+                        } catch (const std::exception &e) {
+                            log::error("Failed to load setting [{} / {}]: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
+                        }
+                    });
+
+                    runOnChangeHandlers(unlocalizedCategory, unlocalizedName, getSetting(unlocalizedCategory, unlocalizedName, entry->widget->store()));
+                }
 
                 return entry->widget.get();
             }
 
             void printSettingReadError(const UnlocalizedString &unlocalizedCategory, const UnlocalizedString &unlocalizedName, const nlohmann::json::exception& e) {
                 hex::log::error("Failed to read setting {}/{}: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
-            }
-
-            void runOnChangeHandlers(const UnlocalizedString &unlocalizedCategory, const UnlocalizedString &unlocalizedName, const nlohmann::json &value) {
-                if (auto categoryIt = s_onChangeCallbacks->find(unlocalizedCategory); categoryIt != s_onChangeCallbacks->end()) {
-                    if (auto nameIt = categoryIt->second.find(unlocalizedName); nameIt != categoryIt->second.end()) {
-                        for (const auto &[id, callback] : nameIt->second) {
-                            try {
-                                callback(value);
-                            } catch (const nlohmann::json::exception &e) {
-                                log::error("Failed to run onChange handler for setting {}/{}: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
-                            }
-                        }
-                    }
-                }
             }
 
         }
@@ -314,7 +336,7 @@ namespace hex {
 
 
             bool SliderDataSize::draw(const std::string &name) {
-                return ImGuiExt::SliderBytes(name.c_str(), &m_value, m_min, m_max);
+                return ImGuiExt::SliderBytes(name.c_str(), &m_value, m_min, m_max, m_stepSize);
             }
 
             void SliderDataSize::load(const nlohmann::json &data) {
@@ -330,17 +352,34 @@ namespace hex {
             }
 
 
-            ColorPicker::ColorPicker(ImColor defaultColor) {
-                m_value = {
-                        defaultColor.Value.x,
-                        defaultColor.Value.y,
-                        defaultColor.Value.z,
-                        defaultColor.Value.w
+            ColorPicker::ColorPicker(ImColor defaultColor, ImGuiColorEditFlags flags) {
+                m_defaultValue = m_value = {
+                    defaultColor.Value.x,
+                    defaultColor.Value.y,
+                    defaultColor.Value.z,
+                    defaultColor.Value.w
                 };
+                m_flags = flags;
             }
 
             bool ColorPicker::draw(const std::string &name) {
-                return ImGui::ColorEdit4(name.c_str(), m_value.data(), ImGuiColorEditFlags_NoInputs);
+                ImGui::PushID(name.c_str());
+                auto result = ImGui::ColorEdit4("##color_picker", m_value.data(), ImGuiColorEditFlags_NoInputs | m_flags);
+
+                ImGui::SameLine();
+
+                if (ImGui::Button("X", ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
+                    m_value = m_defaultValue;
+                    result = true;
+                }
+
+                ImGui::SameLine();
+
+                ImGui::TextUnformatted(name.c_str());
+
+                ImGui::PopID();
+
+                return result;
             }
 
             void ColorPicker::load(const nlohmann::json &data) {
@@ -366,7 +405,7 @@ namespace hex {
             bool DropDown::draw(const std::string &name) {
                 auto preview = "";
                 if (static_cast<size_t>(m_value) < m_items.size())
-                    preview = m_items[m_value].c_str();
+                    preview = m_items[m_value].get().c_str();
 
                 bool changed = false;
                 if (ImGui::BeginCombo(name.c_str(), Lang(preview))) {
@@ -552,6 +591,11 @@ namespace hex {
                 return *s_functions;
             }
 
+            static AutoReset<std::vector<TypeDefinition>> s_types;
+            const std::vector<TypeDefinition>& getTypes() {
+                return *s_types;
+            }
+
         }
 
         static std::string getFunctionName(const pl::api::Namespace &ns, const std::string &name) {
@@ -605,12 +649,16 @@ namespace hex {
                     runtime.addFunction(ns, name, paramCount, callback);
             }
 
+            for (const auto &[ns, name, paramCount, callback] : impl::getTypes()) {
+                runtime.addType(ns, name, paramCount, callback);
+            }
+
             for (const auto &[name, callback] : impl::getPragmas()) {
                 runtime.addPragma(name, callback);
             }
 
             runtime.addDefine("__IMHEX__");
-            runtime.addDefine("__IMHEX_VERSION__", ImHexApi::System::getImHexVersion());
+            runtime.addDefine("__IMHEX_VERSION__", ImHexApi::System::getImHexVersion().get());
         }
 
         void addPragma(const std::string &name, const pl::api::PragmaHandler &handler) {
@@ -639,6 +687,15 @@ namespace hex {
             });
         }
 
+        void addType(const pl::api::Namespace &ns, const std::string &name, pl::api::FunctionParameterCount parameterCount, const pl::api::TypeCallback &func) {
+            log::debug("Registered new pattern language type: {}", getFunctionName(ns, name));
+
+            impl::s_types->push_back({
+                ns, name,
+                parameterCount, func
+            });
+        }
+
 
         void addVisualizer(const std::string &name, const impl::VisualizerFunctionCallback &function, pl::api::FunctionParameterCount parameterCount) {
             log::debug("Registered new pattern visualizer function: {}", name);
@@ -657,15 +714,15 @@ namespace hex {
 
         namespace impl {
 
-            static AutoReset<std::map<std::string, std::unique_ptr<View>>> s_views;
-            const std::map<std::string, std::unique_ptr<View>>& getEntries() {
+            static AutoReset<std::map<UnlocalizedString, std::unique_ptr<View>>> s_views;
+            const std::map<UnlocalizedString, std::unique_ptr<View>>& getEntries() {
                 return *s_views;
             }
 
             void add(std::unique_ptr<View> &&view) {
             log::debug("Registered new view: {}", view->getUnlocalizedName().get());
 
-            s_views->insert({ view->getUnlocalizedName(), std::move(view) });
+            s_views->emplace(view->getUnlocalizedName(), std::move(view));
         }
 
         }
@@ -677,6 +734,15 @@ namespace hex {
                 return views[unlocalizedName].get();
             else
                 return nullptr;
+        }
+
+        View* getFocusedView() {
+            for (const auto &[unlocalizedName, view] : *impl::s_views) {
+                if (view->isFocused())
+                    return view.get();
+            }
+
+            return nullptr;
         }
 
     }
@@ -721,6 +787,14 @@ namespace hex {
             log::debug("Registered new data inspector format: {}", unlocalizedName.get());
 
             impl::s_entries->push_back({ unlocalizedName, requiredSize, maxSize, std::move(displayGeneratorFunction), std::move(editingFunction) });
+        }
+
+        void drawMenuItems(const std::function<void()> &function) {
+            if (ImGui::BeginPopup("##DataInspectorRowContextMenu")) {
+                function();
+                ImGui::Separator();
+                ImGui::EndPopup();
+            }
         }
 
     }
@@ -884,14 +958,14 @@ namespace hex {
                 coloredIcon.color = ImGuiCustomCol_ToolbarGray;
 
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, coloredIcon, std::make_unique<Shortcut>(shortcut), view, function, enabledCallback, selectedCallback, -1 }
+                priority, impl::MenuItem { unlocalizedMainMenuNames, coloredIcon, shortcut, view, function, enabledCallback, selectedCallback, -1 }
             });
 
             if (shortcut != Shortcut::None) {
                 if (shortcut.isLocal() && view != nullptr)
-                    ShortcutManager::addShortcut(view, shortcut, unlocalizedMainMenuNames.back(), function);
+                    ShortcutManager::addShortcut(view, shortcut, unlocalizedMainMenuNames, function, enabledCallback);
                 else
-                    ShortcutManager::addGlobalShortcut(shortcut, unlocalizedMainMenuNames.back(), function);
+                    ShortcutManager::addGlobalShortcut(shortcut, unlocalizedMainMenuNames, function, enabledCallback);
             }
         }
 
@@ -904,14 +978,14 @@ namespace hex {
 
             unlocalizedMainMenuNames.emplace_back(impl::SubMenuValue);
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, icon, std::make_unique<Shortcut>(), nullptr, function, enabledCallback, []{ return false; }, -1 }
+                priority, impl::MenuItem { unlocalizedMainMenuNames, icon, Shortcut::None, nullptr, function, enabledCallback, []{ return false; }, -1 }
             });
         }
 
         void addMenuItemSeparator(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority) {
             unlocalizedMainMenuNames.emplace_back(impl::SeparatorValue);
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, "", std::make_unique<Shortcut>(), nullptr, []{}, []{ return true; }, []{ return false; }, -1 }
+                priority, impl::MenuItem { unlocalizedMainMenuNames, "", Shortcut::None, nullptr, []{}, []{ return true; }, []{ return false; }, -1 }
             });
         }
 
@@ -1061,7 +1135,9 @@ namespace hex {
 
     namespace ContentRegistry::HexEditor {
 
-        const int DataVisualizer::TextInputFlags = ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_NoHorizontalScroll | ImGuiInputTextFlags_AlwaysOverwrite;
+        int DataVisualizer::DefaultTextInputFlags() {
+            return ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_NoHorizontalScroll | ImGuiInputTextFlags_AlwaysOverwrite;
+        }
 
         bool DataVisualizer::drawDefaultScalarEditingTextBox(u64 address, const char *format, ImGuiDataType dataType, u8 *data, ImGuiInputTextFlags flags) const {
             struct UserData {
@@ -1079,7 +1155,7 @@ namespace hex {
             };
 
             ImGui::PushID(reinterpret_cast<void*>(address));
-            ImGuiExt::InputScalarCallback("##editing_input", dataType, data, format, flags | TextInputFlags | ImGuiInputTextFlags_CallbackEdit, [](ImGuiInputTextCallbackData *data) -> int {
+            ImGuiExt::InputScalarCallback("##editing_input", dataType, data, format, flags | DefaultTextInputFlags() | ImGuiInputTextFlags_CallbackEdit, [](ImGuiInputTextCallbackData *data) -> int {
                 auto &userData = *static_cast<UserData*>(data->UserData);
 
                 if (data->CursorPos >= userData.maxChars)
@@ -1110,7 +1186,7 @@ namespace hex {
             };
 
             ImGui::PushID(reinterpret_cast<void*>(address));
-            ImGui::InputText("##editing_input", data.data(), data.size() + 1, flags | TextInputFlags | ImGuiInputTextFlags_CallbackEdit, [](ImGuiInputTextCallbackData *data) -> int {
+            ImGui::InputText("##editing_input", data.data(), data.size() + 1, flags | DefaultTextInputFlags() | ImGuiInputTextFlags_CallbackEdit, [](ImGuiInputTextCallbackData *data) -> int {
                 auto &userData = *static_cast<UserData*>(data->UserData);
 
                 userData.data->resize(data->BufSize);
@@ -1349,6 +1425,25 @@ namespace hex {
 
             void addInformationSectionCreator(const CreateCallback &callback) {
                 s_informationSectionConstructors->emplace_back(callback);
+            }
+
+        }
+
+    }
+
+    namespace ContentRegistry::Disassembler {
+
+        namespace impl {
+
+            static AutoReset<std::map<std::string, impl::CreatorFunction>> s_architectures;
+
+            void addArchitectureCreator(impl::CreatorFunction function) {
+                const auto arch = function();
+                (*s_architectures)[arch->getName()] = std::move(function);
+            }
+
+            const std::map<std::string, impl::CreatorFunction>& getArchitectures() {
+                return *s_architectures;
             }
 
         }

@@ -7,7 +7,7 @@
 
 #include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <vector>
 #include <string>
@@ -28,7 +28,7 @@ namespace hex::plugin::builtin {
 
             evaluator.setFunction(
                 "clear", [&](auto args) -> std::optional<long double> {
-                    hex::unused(args);
+                    std::ignore = args;
 
                     mathHistory.clear();
                     lastMathError.clear();
@@ -106,8 +106,8 @@ namespace hex::plugin::builtin {
 
         if (ImGui::BeginTable("##mathWrapper", 3)) {
             ImGui::TableSetupColumn("##keypad", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize);
-            ImGui::TableSetupColumn("##results", ImGuiTableColumnFlags_WidthStretch, 0.666);
-            ImGui::TableSetupColumn("##variables", ImGuiTableColumnFlags_WidthStretch, 0.666);
+            ImGui::TableSetupColumn("##results", ImGuiTableColumnFlags_WidthStretch, 0.666F);
+            ImGui::TableSetupColumn("##variables", ImGuiTableColumnFlags_WidthStretch, 0.666F);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

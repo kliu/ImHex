@@ -61,7 +61,7 @@ namespace hex::plugin::builtin {
             m_hexEditor.setSelection(region);
         }
 
-        void setSelection(u128 start, u128 end) {
+        void setSelection(u64 start, u64 end) {
             m_hexEditor.setSelection(start, end);
         }
 
@@ -79,6 +79,12 @@ namespace hex::plugin::builtin {
         void registerShortcuts();
         void registerEvents();
         void registerMenuItems();
+
+        /**
+        * Method dedicated to handling paste behaviour when using the normal "Paste" option.
+        * Decides what to do based on user settings, or opens a popup to let them decide.
+        */
+        void processPasteBehaviour(const Region &selection);
 
         ui::HexEditor m_hexEditor;
 

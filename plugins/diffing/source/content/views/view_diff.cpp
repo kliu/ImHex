@@ -1,11 +1,12 @@
 #include "content/views/view_diff.hpp"
 
 #include <hex/api/imhex_api.hpp>
+#include <hex/api/events/requests_gui.hpp>
 
 #include <hex/helpers/fmt.hpp>
 #include <hex/providers/buffered_reader.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 #include <wolv/utils/guards.hpp>
 
 namespace hex::plugin::diffing {
@@ -93,7 +94,7 @@ namespace hex::plugin::diffing {
 
     void ViewDiff::analyze(prv::Provider *providerA, prv::Provider *providerB) {
         auto commonSize = std::max(providerA->getActualSize(), providerB->getActualSize());
-        m_diffTask = TaskManager::createTask("hex.diffing.view.diff.task.diffing"_lang, commonSize, [this, providerA, providerB](Task &) {
+        m_diffTask = TaskManager::createTask("hex.diffing.view.diff.task.diffing", commonSize, [this, providerA, providerB](Task &) {
             auto differences = m_algorithm->analyze(providerA, providerB);
 
             auto providers = ImHexApi::Provider::getProviders();
@@ -149,6 +150,20 @@ namespace hex::plugin::diffing {
         };
     }
 
+    static void drawByteString(const std::vector<u8> &bytes) {
+        for (u64 i = 0; i < bytes.size(); i += 1) {
+            if (i >= 16) {
+                ImGui::TextDisabled(ICON_VS_ELLIPSIS);
+                ImGui::SameLine(0, 0);
+                break;
+            }
+
+            u8 byte = bytes[i];
+            ImGuiExt::TextFormattedDisabled("{0:02X} ", byte);
+            ImGui::SameLine(0, (i % 4 == 3) ? 4_scaled : 0);
+        }
+    }
+
     void ViewDiff::drawContent() {
         auto &[a, b] = m_columns;
 
@@ -189,7 +204,7 @@ namespace hex::plugin::diffing {
 
         const auto availableSize = ImGui::GetContentRegionAvail();
         auto diffingColumnSize = availableSize;
-        diffingColumnSize.y *= 3.5 / 5.0;
+        diffingColumnSize.y *= 3.5F / 5.0F;
         diffingColumnSize.y -= ImGui::GetTextLineHeightWithSpacing();
         diffingColumnSize.y += height;
 
@@ -263,11 +278,12 @@ namespace hex::plugin::diffing {
         }
 
         // Draw the differences table
-        if (ImGui::BeginTable("##differences", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable)) {
+        if (ImGui::BeginTable("##differences", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Reorderable | ImGuiTableFlags_SizingFixedFit)) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("hex.ui.common.begin"_lang);
-            ImGui::TableSetupColumn("hex.ui.common.end"_lang);
-            ImGui::TableSetupColumn("hex.ui.common.type"_lang);
+            ImGui::TableSetupColumn("##Type", ImGuiTableColumnFlags_NoReorder);
+            ImGui::TableSetupColumn("hex.diffing.view.diff.provider_a"_lang);
+            ImGui::TableSetupColumn("hex.diffing.view.diff.provider_b"_lang);
+            ImGui::TableSetupColumn("hex.diffing.view.diff.changes"_lang);
             ImGui::TableHeadersRow();
 
             // Draw the differences if the providers have been analyzed
@@ -289,9 +305,28 @@ namespace hex::plugin::diffing {
 
                         // Draw a clickable row for each difference that will select the difference in both hex editors
 
+                        // Draw difference type
+                        ImGui::TableNextColumn();
+                        switch (typeA) {
+                            case DifferenceType::Mismatch:
+                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffChanged), ICON_VS_DIFF_MODIFIED);
+                                ImGui::SetItemTooltip("%s", "hex.diffing.view.diff.modified"_lang.get());
+                                break;
+                            case DifferenceType::Insertion:
+                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffAdded), ICON_VS_DIFF_ADDED);
+                                ImGui::SetItemTooltip("%s", "hex.diffing.view.diff.added"_lang.get());
+                                break;
+                            case DifferenceType::Deletion:
+                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffRemoved), ICON_VS_DIFF_REMOVED);
+                                ImGui::SetItemTooltip("%s", "hex.diffing.view.diff.removed"_lang.get());
+                                break;
+                            default:
+                                break;
+                        }
+
                         // Draw start address
                         ImGui::TableNextColumn();
-                        if (ImGui::Selectable(hex::format("0x{:02X}", regionA.start).c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+                        if (ImGui::Selectable(hex::format("0x{:04X} - 0x{:04X}", regionA.start, regionA.end).c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
                             const Region selectionA = { regionA.start, ((regionA.end - regionA.start) + 1) };
                             const Region selectionB = { regionB.start, ((regionB.end - regionB.start) + 1) };
 
@@ -311,23 +346,42 @@ namespace hex::plugin::diffing {
 
                         // Draw end address
                         ImGui::TableNextColumn();
-                        ImGui::TextUnformatted(hex::format("0x{:02X}", regionA.end).c_str());
+                        ImGui::TextUnformatted(hex::format("0x{:04X} - 0x{:04X}", regionB.start, regionB.end).c_str());
 
-                        // Draw difference type
+                        const auto &providers = ImHexApi::Provider::getProviders();
+                        std::vector<u8> data;
+
+                        // Draw changes
                         ImGui::TableNextColumn();
+                        ImGui::Indent();
                         switch (typeA) {
-                            case DifferenceType::Mismatch:
-                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffChanged), "hex.diffing.view.diff.modified"_lang);
-                                break;
                             case DifferenceType::Insertion:
-                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffAdded), "hex.diffing.view.diff.added"_lang);
+                                data.resize(std::min<u64>(17, (regionA.end - regionA.start) + 1));
+                                providers[a.provider]->read(regionA.start, data.data(), data.size());
+                                drawByteString(data);
+                                break;
+                            case DifferenceType::Mismatch:
+                                data.resize(std::min<u64>(17, (regionA.end - regionA.start) + 1));
+                                providers[a.provider]->read(regionA.start, data.data(), data.size());
+                                drawByteString(data);
+
+                                ImGui::SameLine(0, 0);
+                                ImGuiExt::TextFormatted(" {}  ", ICON_VS_ARROW_RIGHT);
+                                ImGui::SameLine(0, 0);
+
+                                data.resize(std::min<u64>(17, (regionB.end - regionB.start) + 1));
+                                providers[b.provider]->read(regionB.start, data.data(), data.size());
+                                drawByteString(data);
                                 break;
                             case DifferenceType::Deletion:
-                                ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_DiffRemoved), "hex.diffing.view.diff.removed"_lang);
+                                data.resize(std::min<u64>(17, (regionB.end - regionB.start) + 1));
+                                providers[b.provider]->read(regionB.start, data.data(), data.size());
+                                drawByteString(data);
                                 break;
                             default:
                                 break;
                         }
+                        ImGui::Unindent();
 
                         ImGui::PopID();
                     }

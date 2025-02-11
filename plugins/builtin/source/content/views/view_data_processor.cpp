@@ -5,6 +5,9 @@
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
 
+#include <hex/api/events/events_provider.hpp>
+#include <hex/api/events/requests_gui.hpp>
+
 #include <hex/providers/provider.hpp>
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/default_paths.hpp>
@@ -83,7 +86,7 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        std::string m_name = Lang(this->getUnlocalizedName());
+        std::string m_name = Lang(this->getUnlocalizedName()).get();
         int m_type = 0;
 
         std::variant<i128, long double, std::vector<u8>> m_value;
@@ -153,7 +156,7 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        std::string m_name = Lang(this->getUnlocalizedName());
+        std::string m_name = Lang(this->getUnlocalizedName()).get();
         int m_type = 0;
 
         std::variant<i128, long double, std::vector<u8>> m_value;
@@ -341,7 +344,7 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        std::string m_name = "hex.builtin.nodes.custom.custom.header"_lang;
+        std::string m_name = "hex.builtin.nodes.custom.custom.header"_lang.get();
 
         bool m_editable = false;
 
@@ -373,7 +376,7 @@ namespace hex::plugin::builtin {
             }
         });
 
-        EventProviderCreated::subscribe(this, [this](auto *provider) {
+        EventProviderOpened::subscribe(this, [this](auto *provider) {
             m_mainWorkspace.get(provider) = { };
             m_workspaceStack.get(provider).push_back(&m_mainWorkspace.get(provider));
         });
@@ -426,7 +429,7 @@ namespace hex::plugin::builtin {
     }
 
     ViewDataProcessor::~ViewDataProcessor() {
-        EventProviderCreated::unsubscribe(this);
+        EventProviderOpened::unsubscribe(this);
         EventProviderChanged::unsubscribe(this);
         RequestChangeTheme::unsubscribe(this);
         EventFileLoaded::unsubscribe(this);
@@ -497,6 +500,12 @@ namespace hex::plugin::builtin {
                             return node->getId() == id;
                           });
 
+            if (workspace.currNodeError.has_value()) {
+                if (workspace.currNodeError->node == node->get()) {
+                    workspace.currNodeError.reset();
+                }
+            }
+
             // Remove the node from the workspace
             workspace.nodes.erase(node);
         }
@@ -528,7 +537,7 @@ namespace hex::plugin::builtin {
         // Reset any potential node errors
         workspace.currNodeError.reset();
 
-        m_evaluationTask = TaskManager::createTask("hex.builtin.task.evaluating_nodes"_lang, 0, [this, workspace = &workspace](Task& task) {
+        m_evaluationTask = TaskManager::createTask("hex.builtin.task.evaluating_nodes", 0, [this, workspace = &workspace](Task& task) {
             task.setInterruptCallback([]{
                 dp::Node::interrupt();
             });
@@ -881,7 +890,9 @@ namespace hex::plugin::builtin {
 
         bool popWorkspace = false;
         // Set the ImNodes context to the current workspace context
+        auto prevContext = ImNodes::GetCurrentContext();
         ImNodes::SetCurrentContext(workspace.context.get());
+        ON_SCOPE_EXIT { ImNodes::SetCurrentContext(prevContext); };
 
         this->drawContextMenus(workspace);
 

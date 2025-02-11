@@ -1,10 +1,12 @@
 #if !defined(OS_WEB)
 
-    #include <hex/api/event_manager.hpp>
+    #include <hex/api/events/requests_lifecycle.hpp>
     #include <wolv/utils/guards.hpp>
 
     #include <init/run.hpp>
     #include <window.hpp>
+
+    #include <GLFW/glfw3.h>
 
     namespace hex::init {
 
@@ -27,15 +29,22 @@
                     handleFileOpenRequest();
                 }
 
-                // Clean up everything after the main window is closed
-                ON_SCOPE_EXIT {
+                {
+                    // Initialize GLFW
+                    if (!glfwInit()) {
+                        log::fatal("Failed to initialize GLFW!");
+                        std::abort();
+                    }
+                    ON_SCOPE_EXIT { glfwTerminate(); };
+
+                    // Main window
+                    {
+                        Window window;
+                        window.loop();
+                    }
+
                     deinitializeImHex();
-                };
-
-                // Main window
-                Window window;
-                window.loop();
-
+                }
             } while (shouldRestart);
 
             return EXIT_SUCCESS;

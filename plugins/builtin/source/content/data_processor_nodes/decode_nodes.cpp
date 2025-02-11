@@ -1,8 +1,12 @@
+#include <algorithm>
 #include <hex/api/content_registry.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/crypto.hpp>
 #include <hex/data_processor/node.hpp>
+
+#include <mbedtls/cipher.h>
+#include <mbedtls/error.h>
 
 #include <nlohmann/json.hpp>
 
@@ -19,12 +23,15 @@ namespace hex::plugin::builtin {
 
         void drawNode() override {
             ImGui::PushItemWidth(100_scaled);
-            ImGui::Combo("hex.builtin.nodes.crypto.aes.mode"_lang, &m_mode, "ECB\0CBC\0CFB128\0CTR\0GCM\0CCM\0OFB\0");
-            ImGui::Combo("hex.builtin.nodes.crypto.aes.key_length"_lang, &m_keyLength, "128 Bits\000192 Bits\000256 Bits\000");
+            ImGui::Combo("hex.builtin.nodes.crypto.aes.mode"_lang, &m_mode, "ECB\x00""CBC\x00""CFB128\x00""CTR\x00""GCM\x00""CCM\x00""OFB\x00");
+            ImGui::Combo("hex.builtin.nodes.crypto.aes.key_length"_lang, &m_keyLength, "128 Bits\x00""192 Bits\x00""256 Bits\x00");
             ImGui::PopItemWidth();
         }
 
         void process() override {
+            const auto mode = static_cast<crypt::AESMode>(m_mode);
+            const auto keyLength = static_cast<crypt::KeyLength>(m_keyLength);
+
             const auto &key   = this->getBufferOnInput(0);
             const auto &iv    = this->getBufferOnInput(1);
             const auto &nonce = this->getBufferOnInput(2);
@@ -38,12 +45,34 @@ namespace hex::plugin::builtin {
 
             std::array<u8, 8> ivData = { 0 }, nonceData = { 0 };
 
-            std::copy(iv.begin(), iv.end(), ivData.begin());
-            std::copy(nonce.begin(), nonce.end(), nonceData.begin());
+            if (mode != crypt::AESMode::ECB) {
+                if (iv.empty())
+                    throwNodeError("IV cannot be empty");
 
-            auto output = crypt::aesDecrypt(static_cast<crypt::AESMode>(m_mode), static_cast<crypt::KeyLength>(m_keyLength), key, nonceData, ivData, input);
+                if (nonce.empty())
+                    throwNodeError("Nonce cannot be empty");
 
-            this->setBufferOnOutput(4, output);
+                std::ranges::copy(iv, ivData.begin());
+                std::ranges::copy(nonce, nonceData.begin());
+            }
+
+            auto output = crypt::aesDecrypt(mode, keyLength, key, nonceData, ivData, input);
+            if (!output) {
+                switch (output.error()) {
+                    case CRYPTO_ERROR_INVALID_KEY_LENGTH:
+                        throwNodeError("Invalid key length");
+                    case CRYPTO_ERROR_INVALID_MODE:
+                        throwNodeError("Invalid mode");
+                    default: {
+                        std::array<char, 128> errorBuffer = { 0 };
+                        mbedtls_strerror(output.error(), errorBuffer.data(), errorBuffer.size());
+
+                        throwNodeError(std::string(errorBuffer.data()));
+                    }
+                }
+            }
+
+            this->setBufferOnOutput(4, output.value());
         }
 
         void store(nlohmann::json &j) const override {

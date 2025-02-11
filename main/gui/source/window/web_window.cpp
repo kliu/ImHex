@@ -5,7 +5,12 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
-#include <hex/api/event_manager.hpp>
+#include <hex/api/events/events_gui.hpp>
+#include <hex/api/events/events_interaction.hpp>
+#include <hex/api/events/requests_gui.hpp>
+#include <hex/api/theme_manager.hpp>
+
+#include <GLFW/glfw3.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -23,6 +28,10 @@ EM_JS(int, canvas_get_height, (), {
 // Function called by javascript
 EM_JS(void, resizeCanvas, (), {
     js_resizeCanvas();
+});
+
+EM_JS(bool, isMacOS, (), {
+    return navigator.userAgent.indexOf('Mac OS X') != -1
 });
 
 EM_JS(void, fixCanvasInPlace, (), {
@@ -126,6 +135,9 @@ namespace hex {
 
         if (themeFollowSystem)
             EventOSThemeChanged::post();
+
+        if (isMacOS())
+            ShortcutManager::enableMacOSMode();
     }
 
     void Window::beginNativeWindowFrame() {
@@ -145,6 +157,27 @@ namespace hex {
     }
 
     void Window::endNativeWindowFrame() {
+        static float prevScaleFactor = 0;
+
+        const float currScaleFactor = MAIN_THREAD_EM_ASM_DOUBLE({
+            try {
+                // Take square root of scaling to counter scaling applied by Browser
+                return Math.sqrt(window.devicePixelRatio);
+            } catch (e) {
+                return 1.0;
+            }
+        });
+        if (prevScaleFactor != 0 && prevScaleFactor != currScaleFactor) {
+            EventDPIChanged::post(prevScaleFactor, currScaleFactor);
+            resizeCanvas();
+
+            ImHexApi::System::impl::setNativeScale(currScaleFactor);
+
+            ThemeManager::reapplyCurrentTheme();
+            ImGui::GetStyle().ScaleAllSizes(currScaleFactor);
+        }
+
+        prevScaleFactor = currScaleFactor;
     }
 
 }

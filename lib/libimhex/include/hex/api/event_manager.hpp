@@ -31,15 +31,6 @@
 #define EVENT_DEF_NO_LOG(event_name, ...)   EVENT_DEF_IMPL(event_name, #event_name, false, __VA_ARGS__)
 
 
-/* Forward declarations */
-struct GLFWwindow;
-namespace hex {
-    class Achievement;
-    class View;
-}
-
-namespace pl::ptrn { class Pattern; }
-
 namespace hex {
 
     namespace impl {
@@ -99,7 +90,8 @@ namespace hex {
 
     /**
      * @brief The EventManager allows subscribing to and posting events to different parts of the program.
-     * To create a new event, use the EVENT_DEF macro. This will create a new event type with the given name and parameters
+     * To create a new event, use the EVENT_DEF macro. This will create a new event type with the given name and parameters.
+     * Events should be created in an `events_*.hpp` category file under the `events` folder, and never directly here.
      */
     class EventManager {
     public:
@@ -129,15 +121,9 @@ namespace hex {
         static void subscribe(void *token, typename E::Callback function) {
             std::scoped_lock lock(getEventMutex());
 
-            if (getTokenStore().contains(token)) {
-                auto&& [begin, end] = getTokenStore().equal_range(token);
-                const auto eventRegistered = std::any_of(begin, end, [&](auto &item) {
-                    return item.second->first == E::Id;
-                });
-                if (eventRegistered) {
-                    log::fatal("The token '{}' has already registered the same event ('{}')", token, wolv::type::getTypeName<E>());
-                    return;
-                }
+            if (isAlreadyRegistered(token, E::Id)) {
+                log::fatal("The token '{}' has already registered the same event ('{}')", token, wolv::type::getTypeName<E>());
+                return;
             }
 
             getTokenStore().insert({ token, subscribe<E>(function) });
@@ -162,16 +148,7 @@ namespace hex {
         static void unsubscribe(void *token) noexcept {
             std::scoped_lock lock(getEventMutex());
 
-            auto &tokenStore = getTokenStore();
-            auto iter = std::find_if(tokenStore.begin(), tokenStore.end(), [&](auto &item) {
-                return item.first == token && item.second->first == E::Id;
-            });
-
-            if (iter != tokenStore.end()) {
-                getEvents().erase(iter->second);
-                tokenStore.erase(iter);
-            }
-
+            unsubscribe(token, E::Id);
         }
 
         /**
@@ -209,119 +186,9 @@ namespace hex {
         static std::multimap<void *, EventList::iterator>& getTokenStore();
         static EventList& getEvents();
         static std::recursive_mutex& getEventMutex();
+
+        static bool isAlreadyRegistered(void *token, impl::EventId id);
+        static void unsubscribe(void *token, impl::EventId id);
     };
 
-    /* Default Events */
-    
-    /**
-     * @brief Called when Imhex finished startup, and will enter the main window rendering loop
-     */
-    EVENT_DEF(EventImHexStartupFinished);
-
-    EVENT_DEF(EventFileLoaded, std::fs::path);
-    EVENT_DEF(EventDataChanged, prv::Provider *);
-    EVENT_DEF(EventHighlightingChanged);
-    EVENT_DEF(EventWindowClosing, GLFWwindow *);
-    EVENT_DEF(EventRegionSelected, ImHexApi::HexEditor::ProviderRegion);
-    EVENT_DEF(EventAbnormalTermination, int);
-    EVENT_DEF(EventThemeChanged);
-    EVENT_DEF(EventOSThemeChanged);
-    EVENT_DEF(EventDPIChanged, float, float);
-    EVENT_DEF(EventWindowFocused, bool);
-
-    /**
-     * @brief Called when the provider is created.
-     * This event is responsible for (optionally) initializing the provider and calling EventProviderOpened
-     * (although the event can also be called manually without problem)
-     */
-    EVENT_DEF(EventProviderCreated, prv::Provider *);
-    EVENT_DEF(EventProviderChanged, prv::Provider *, prv::Provider *);
-
-    /**
-     * @brief Called as a continuation of EventProviderCreated
-     * this event is normally called immediately after EventProviderCreated successfully initialized the provider.
-     * If no initialization (Provider::skipLoadInterface() has been set), this event should be called manually
-     * If skipLoadInterface failed, this event is not called
-     * 
-     * @note this is not related to Provider::open()
-     */
-    EVENT_DEF(EventProviderOpened,  prv::Provider *);
-    EVENT_DEF(EventProviderClosing, prv::Provider *, bool *);
-    EVENT_DEF(EventProviderClosed,  prv::Provider *);
-    EVENT_DEF(EventProviderDeleted, prv::Provider *);
-    EVENT_DEF(EventProviderSaved,   prv::Provider *);
-    EVENT_DEF(EventWindowInitialized);
-    EVENT_DEF(EventWindowDeinitializing, GLFWwindow *);
-    EVENT_DEF(EventBookmarkCreated, ImHexApi::Bookmarks::Entry&);
-    EVENT_DEF(EventPatchCreated, u64, u8, u8);
-    EVENT_DEF(EventPatternEvaluating);
-    EVENT_DEF(EventPatternExecuted, const std::string&);
-    EVENT_DEF(EventPatternEditorChanged, const std::string&);
-    EVENT_DEF(EventStoreContentDownloaded, const std::fs::path&);
-    EVENT_DEF(EventStoreContentRemoved, const std::fs::path&);
-    EVENT_DEF(EventImHexClosing);
-    EVENT_DEF(EventAchievementUnlocked, const Achievement&);
-    EVENT_DEF(EventSearchBoxClicked, u32);
-    EVENT_DEF(EventViewOpened, View*);
-    EVENT_DEF(EventFirstLaunch);
-
-    EVENT_DEF(EventFileDragged, bool);
-    EVENT_DEF(EventFileDropped, std::fs::path);
-
-    EVENT_DEF(EventProviderDataModified, prv::Provider *, u64, u64, const u8*);
-    EVENT_DEF(EventProviderDataInserted, prv::Provider *, u64, u64);
-    EVENT_DEF(EventProviderDataRemoved, prv::Provider *, u64, u64);
-    EVENT_DEF(EventProviderDirtied, prv::Provider *);
-
-    /**
-     * @brief Called when a project has been loaded
-     */
-    EVENT_DEF(EventProjectOpened);
-
-    EVENT_DEF_NO_LOG(EventFrameBegin);
-    EVENT_DEF_NO_LOG(EventFrameEnd);
-    EVENT_DEF_NO_LOG(EventSetTaskBarIconState, u32, u32, u32);
-    EVENT_DEF_NO_LOG(EventImGuiElementRendered, ImGuiID, const std::array<float, 4>&);
-
-    EVENT_DEF(RequestAddInitTask, std::string, bool, std::function<bool()>);
-    EVENT_DEF(RequestAddExitTask, std::string, std::function<bool()>);
-    EVENT_DEF(RequestOpenWindow, std::string);
-    EVENT_DEF(RequestHexEditorSelectionChange, Region);
-    EVENT_DEF(RequestPatternEditorSelectionChange, u32, u32);
-    EVENT_DEF(RequestJumpToPattern, const pl::ptrn::Pattern*);
-    EVENT_DEF(RequestAddBookmark, Region, std::string, std::string, color_t, u64*);
-    EVENT_DEF(RequestRemoveBookmark, u64);
-    EVENT_DEF(RequestSetPatternLanguageCode, std::string);
-    EVENT_DEF(RequestRunPatternCode);
-    EVENT_DEF(RequestLoadPatternLanguageFile, std::fs::path);
-    EVENT_DEF(RequestSavePatternLanguageFile, std::fs::path);
-    EVENT_DEF(RequestUpdateWindowTitle);
-    EVENT_DEF(RequestCloseImHex, bool);
-    EVENT_DEF(RequestRestartImHex);
-    EVENT_DEF(RequestOpenFile, std::fs::path);
-    EVENT_DEF(RequestChangeTheme, std::string);
-    EVENT_DEF(RequestOpenPopup, std::string);
-    EVENT_DEF(RequestAddVirtualFile, std::fs::path, std::vector<u8>, Region);
-
-    /**
-     * @brief Creates a provider from it's unlocalized name, and add it to the provider list
-    */
-    EVENT_DEF(RequestCreateProvider, std::string, bool, bool, hex::prv::Provider **);
-    EVENT_DEF(RequestInitThemeHandlers);
-
-    /**
-     * @brief Send an event to the main Imhex instance
-     */
-    EVENT_DEF(SendMessageToMainInstance, const std::string, const std::vector<u8>&);
-
-    /**
-     * Move the data from all PerProvider instances from one provider to another.
-     * The 'from' provider should not have any per provider data after this, and should be immediately deleted
-    */
-    EVENT_DEF(MovePerProviderData, prv::Provider *, prv::Provider *);
-
-    /**
-     * Called when ImHex managed to catch an error in a general try/catch to prevent/recover from a crash
-    */
-    EVENT_DEF(EventCrashRecovered, const std::exception &);
 }

@@ -2,7 +2,7 @@
 #include "init/splash_window.hpp"
 
 #include <hex/api/imhex_api.hpp>
-#include <hex/api/event_manager.hpp>
+#include <hex/api/events/requests_lifecycle.hpp>
 
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/fmt.hpp>
@@ -31,6 +31,8 @@
 using namespace std::literals::chrono_literals;
 
 namespace hex::init {
+    
+    constexpr static auto WindowSize = ImVec2(640, 400);
 
     struct GlfwError {
         int errorCode = 0;
@@ -60,11 +62,15 @@ namespace hex::init {
         }
 
         RequestAddInitTask::subscribe([this](const std::string& name, bool async, const TaskFunction &function){
-            m_tasks.push_back(Task{ name, function, async });
+            m_tasks.push_back(Task{ name, function, async, false });
         });
     }
 
     WindowSplash::~WindowSplash() {
+        // Clear textures before deinitializing glfw
+        m_splashBackgroundTexture.reset();
+        m_splashTextTexture.reset();
+
         this->exitImGui();
         this->exitGLFW();
     }
@@ -220,14 +226,17 @@ namespace hex::init {
 
             auto startTime = std::chrono::high_resolution_clock::now();
 
-            // Loop over all registered init tasks
-            for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
-                // Construct a new task callback
-                this->createTask(*it);
-            }
-
             // Check every 100ms if all tasks have run
             while (true) {
+                // Loop over all registered init tasks
+                for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
+                    // Construct a new task callback
+                    if (!it->running) {
+                        this->createTask(*it);
+                        it->running = true;
+                    }
+                }
+
                 {
                     std::scoped_lock lock(m_tasksMutex);
                     if (m_completedTaskCount >= m_totalTaskCount)
@@ -251,7 +260,7 @@ namespace hex::init {
 
 
     FrameResult WindowSplash::fullFrame() {
-        glfwSetWindowSize(m_window, 640, 400);
+        glfwSetWindowSize(m_window, WindowSize.x, WindowSize.y);
         centerWindow(m_window);
 
         glfwPollEvents();
@@ -266,7 +275,7 @@ namespace hex::init {
         {
 
             // Draw the splash screen background
-            drawList->AddImage(this->m_splashBackgroundTexture, ImVec2(0, 0), this->m_splashBackgroundTexture.getSize());
+            drawList->AddImage(this->m_splashBackgroundTexture, ImVec2(0, 0), WindowSize);
 
             {
 
@@ -274,7 +283,7 @@ namespace hex::init {
                 const auto highlightBytes = [&](ImVec2 start, size_t count, ImColor color, float opacity) {
                     // Dimensions and number of bytes that are drawn. Taken from the splash screen image
                     const auto hexSize = ImVec2(29, 18);
-                    const auto hexSpacing = ImVec2(17.4, 15);
+                    const auto hexSpacing = ImVec2(17.4F, 15);
                     const auto hexStart = ImVec2(27, 127);
 
                     constexpr auto HexCount = ImVec2(13, 7);
@@ -323,7 +332,7 @@ namespace hex::init {
             this->m_progressLerp += (m_progress - this->m_progressLerp) * 0.1F;
 
             // Draw the splash screen foreground
-            drawList->AddImage(this->m_splashTextTexture, ImVec2(0, 0), this->m_splashTextTexture.getSize());
+            drawList->AddImage(this->m_splashTextTexture, ImVec2(0, 0), WindowSize);
 
             // Draw the "copyright" notice
             drawList->AddText(ImVec2(35, 85), ImColor(0xFF, 0xFF, 0xFF, 0xFF), hex::format("WerWolv\n2020 - {0}", &__DATE__[7]).c_str());
@@ -331,12 +340,12 @@ namespace hex::init {
             // Draw version information
             // In debug builds, also display the current commit hash and branch
             #if defined(DEBUG)
-                const static auto VersionInfo = hex::format("{0} : {1}@{2}", ImHexApi::System::getImHexVersion(), ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash());
+                const static auto VersionInfo = hex::format("{0} : {1}@{2}", ImHexApi::System::getImHexVersion().get(), ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash());
             #else
-                const static auto VersionInfo = hex::format("{0}", ImHexApi::System::getImHexVersion());
+                const static auto VersionInfo = hex::format("{0}", ImHexApi::System::getImHexVersion().get());
             #endif
 
-            drawList->AddText(ImVec2((this->m_splashBackgroundTexture.getSize().x - ImGui::CalcTextSize(VersionInfo.c_str()).x) / 2, 105), ImColor(0xFF, 0xFF, 0xFF, 0xFF), VersionInfo.c_str());
+            drawList->AddText(ImVec2((WindowSize.x - ImGui::CalcTextSize(VersionInfo.c_str()).x) / 2, 105), ImColor(0xFF, 0xFF, 0xFF, 0xFF), VersionInfo.c_str());
         }
 
         // Draw the task progress bar
@@ -433,8 +442,16 @@ namespace hex::init {
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
         #endif
 
-	#if defined(OS_LINUX) && defined(GLFW_WAYLAND_APP_ID)
-	    glfwWindowHintString(GLFW_WAYLAND_APP_ID, "imhex");
+	#if defined(OS_LINUX)
+        #if defined(GLFW_WAYLAND_APP_ID)
+	        glfwWindowHintString(GLFW_WAYLAND_APP_ID, "imhex");
+        #endif
+
+        #if defined(GLFW_SCALE_FRAMEBUFFER)
+            glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
+        #endif
+
+        glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 	#endif
 
         // Make splash screen non-resizable, undecorated and transparent
@@ -457,6 +474,8 @@ namespace hex::init {
             std::exit(EXIT_FAILURE);
         }
 
+        ImHexApi::System::impl::setMainWindowHandle(m_window);
+
         // Force window to be fully opaque by default
         glfwSetWindowOpacity(m_window, 1.0F);
 
@@ -469,11 +488,7 @@ namespace hex::init {
             if (meanScale <= 0.0F)
                 meanScale = 1.0F;
 
-            #if defined(OS_MACOS)
-                meanScale /= getBackingScaleFactor();
-            #elif defined(OS_WEB)
-                meanScale = 1.0F;
-            #endif
+            meanScale /= hex::ImHexApi::System::getBackingScaleFactor();
 
             ImHexApi::System::impl::setGlobalScale(meanScale);
             ImHexApi::System::impl::setNativeScale(meanScale);
@@ -497,7 +512,7 @@ namespace hex::init {
             ImGui_ImplOpenGL3_Init("#version 150");
         #elif defined(OS_WEB)
             ImGui_ImplOpenGL3_Init();
-            ImGui_ImplGlfw_InstallEmscriptenCanvasResizeCallback("#canvas");
+            ImGui_ImplGlfw_InstallEmscriptenCallbacks(m_window, "#canvas");
         #else
             ImGui_ImplOpenGL3_Init("#version 130");
         #endif
@@ -514,19 +529,7 @@ namespace hex::init {
             cfg.OversampleH = cfg.OversampleV = 1, cfg.PixelSnapH = true;
             cfg.SizePixels = ImHexApi::Fonts::DefaultFontSize;
             io.Fonts->AddFontDefault(&cfg);
-
-            std::uint8_t *px;
-            int w, h;
-            io.Fonts->GetTexDataAsAlpha8(&px, &w, &h);
-
-            // Create new font atlas
-            GLuint tex;
-            glGenTextures(1, &tex);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_ALPHA, GL_UNSIGNED_BYTE, px);
-            io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(tex));
+            ImGui_ImplOpenGL3_CreateFontsTexture();
         }
 
         // Don't save window settings for the splash screen
@@ -539,8 +542,9 @@ namespace hex::init {
     void WindowSplash::loadAssets() {
 
         // Load splash screen image from romfs
-        this->m_splashBackgroundTexture = ImGuiExt::Texture::fromImage(romfs::get("splash_background.png").span(), ImGuiExt::Texture::Filter::Linear);
-        this->m_splashTextTexture = ImGuiExt::Texture::fromImage(romfs::get("splash_text.png").span(), ImGuiExt::Texture::Filter::Linear);
+        const auto backingScale = ImHexApi::System::getNativeScale();
+        this->m_splashBackgroundTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_background.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
+        this->m_splashTextTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_text.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
 
         // If the image couldn't be loaded correctly, something went wrong during the build process
         // Close the application since this would lead to errors later on anyway.

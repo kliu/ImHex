@@ -2,10 +2,10 @@
 
 #include <hex.hpp>
 #include <hex/api/localization_manager.hpp>
+#include <hex/api/shortcut_manager.hpp>
 #include <hex/helpers/concepts.hpp>
 
 #include <functional>
-#include <map>
 #include <mutex>
 #include <span>
 #include <string>
@@ -20,11 +20,11 @@ using ImGuiDataType = int;
 using ImGuiInputTextFlags = int;
 struct ImColor;
 enum ImGuiCustomCol : int;
+typedef int ImGuiColorEditFlags;
 
 namespace hex {
 
     class View;
-    class Shortcut;
     class Task;
 
     namespace dp {
@@ -44,7 +44,6 @@ namespace hex {
         plugins when needed.
     */
     namespace ContentRegistry {
-
         /* Settings Registry. Allows adding of new entries into the ImHex preferences window. */
         namespace Settings {
 
@@ -178,7 +177,7 @@ namespace hex {
 
                 class SliderDataSize : public Widget {
                 public:
-                    SliderDataSize(u64 defaultValue, u64 min, u64 max) : m_value(defaultValue), m_min(min), m_max(max) { }
+                    SliderDataSize(u64 defaultValue, u64 min, u64 max, u64 stepSize) : m_value(defaultValue), m_min(min), m_max(max), m_stepSize(stepSize) { }
                     bool draw(const std::string &name) override;
 
                     void load(const nlohmann::json &data) override;
@@ -189,11 +188,12 @@ namespace hex {
                 protected:
                     u64 m_value;
                     u64 m_min, m_max;
+                    u64 m_stepSize;
                 };
 
                 class ColorPicker : public Widget {
                 public:
-                    explicit ColorPicker(ImColor defaultColor);
+                    explicit ColorPicker(ImColor defaultColor, ImGuiColorEditFlags flags = 0);
 
                     bool draw(const std::string &name) override;
 
@@ -203,12 +203,14 @@ namespace hex {
                     [[nodiscard]] ImColor getColor() const;
 
                 protected:
-                    std::array<float, 4> m_value{};
+                    std::array<float, 4> m_value = {}, m_defaultValue = {};
+                    ImGuiColorEditFlags m_flags;
                 };
 
                 class DropDown : public Widget {
                 public:
-                    explicit DropDown(const std::vector<std::string> &items, const std::vector<nlohmann::json> &settingsValues, const nlohmann::json &defaultItem) : m_items(items), m_settingsValues(settingsValues), m_defaultItem(defaultItem) { }
+                    explicit DropDown(const std::vector<std::string> &items, const std::vector<nlohmann::json> &settingsValues, const nlohmann::json &defaultItem) : m_items(items.begin(), items.end()), m_settingsValues(settingsValues), m_defaultItem(defaultItem) { }
+                    explicit DropDown(const std::vector<UnlocalizedString> &items, const std::vector<nlohmann::json> &settingsValues, const nlohmann::json &defaultItem) : m_items(items), m_settingsValues(settingsValues), m_defaultItem(defaultItem) { }
 
                     bool draw(const std::string &name) override;
 
@@ -219,7 +221,7 @@ namespace hex {
                     const nlohmann::json& getValue() const;
 
                 protected:
-                    std::vector<std::string> m_items;
+                    std::vector<UnlocalizedString> m_items;
                     std::vector<nlohmann::json> m_settingsValues;
                     nlohmann::json m_defaultItem;
 
@@ -326,7 +328,7 @@ namespace hex {
                             result = defaultValue;
 
                         return result.get<T>();
-                    } catch (const nlohmann::json::exception &e) {
+                    } catch (const nlohmann::json::exception &) {
                         return defaultValue;
                     }
                 }
@@ -381,7 +383,7 @@ namespace hex {
                 };
 
                 using DisplayCallback = std::function<std::string(std::string)>;
-                using ExecuteCallback = std::function<void(std::string)>;
+                using ExecuteCallback = std::function<std::optional<std::string>(std::string)>;
                 using QueryCallback   = std::function<std::vector<QueryResult>(std::string)>;
 
                 struct Entry {
@@ -417,7 +419,7 @@ namespace hex {
                 const std::string &command,
                 const UnlocalizedString &unlocalizedDescription,
                 const impl::DisplayCallback &displayCallback,
-                const impl::ExecuteCallback &executeCallback = [](auto) {});
+                const impl::ExecuteCallback &executeCallback = [](auto) { return std::nullopt; });
 
             /**
              * @brief Adds a new command handler to the command palette
@@ -450,6 +452,14 @@ namespace hex {
                     bool dangerous;
                 };
 
+                struct TypeDefinition {
+                    pl::api::Namespace ns;
+                    std::string name;
+
+                    pl::api::FunctionParameterCount parameterCount;
+                    pl::api::TypeCallback callback;
+                };
+
                 struct Visualizer {
                     pl::api::FunctionParameterCount parameterCount;
                     VisualizerFunctionCallback callback;
@@ -459,6 +469,7 @@ namespace hex {
                 const std::map<std::string, Visualizer>& getInlineVisualizers();
                 const std::map<std::string, pl::api::PragmaHandler>& getPragmas();
                 const std::vector<FunctionDefinition>& getFunctions();
+                const std::vector<TypeDefinition>& getTypes();
 
             }
 
@@ -518,6 +529,20 @@ namespace hex {
             );
 
             /**
+             * @brief Adds a new type to the pattern language
+             * @param ns The namespace of the type
+             * @param name The name of the type
+             * @param parameterCount The amount of non-type template parameters the type takes
+             * @param func The type callback
+             */
+            void addType(
+                const pl::api::Namespace &ns,
+                const std::string &name,
+                pl::api::FunctionParameterCount parameterCount,
+                const pl::api::TypeCallback &func
+            );
+
+            /**
              * @brief Adds a new visualizer to the pattern language
              * @note Visualizers are extensions to the [[hex::visualize]] attribute, used to visualize data
              * @param name The name of the visualizer
@@ -551,7 +576,7 @@ namespace hex {
             namespace impl {
 
                 void add(std::unique_ptr<View> &&view);
-                const std::map<std::string, std::unique_ptr<View>>& getEntries();
+                const std::map<UnlocalizedString, std::unique_ptr<View>>& getEntries();
 
             }
 
@@ -572,6 +597,12 @@ namespace hex {
              * @return The view if it exists, nullptr otherwise
              */
             View* getViewByName(const UnlocalizedString &unlocalizedName);
+
+            /**
+             * @brief Gets the currently focused view
+             * @return The view that is focused right now. nullptr if none is focused
+             */
+            View* getFocusedView();
         }
 
         /* Tools Registry. Allows adding new entries to the tools window */
@@ -601,8 +632,7 @@ namespace hex {
         /* Data Inspector Registry. Allows adding of new types to the data inspector */
         namespace DataInspector {
 
-            enum class NumberDisplayStyle
-            {
+            enum class NumberDisplayStyle : u8 {
                 Decimal,
                 Hexadecimal,
                 Octal
@@ -656,6 +686,13 @@ namespace hex {
                 std::optional<impl::EditingFunction> editingFunction = std::nullopt
             );
 
+            /**
+             * @brief Allows adding new menu items to data inspector row context menus. Call this function inside the
+             * draw function of the data inspector row definition.
+             * @param function Callback that will draw menu items
+             */
+            void drawMenuItems(const std::function<void()> &function);
+
         }
 
         /* Data Processor Node Registry. Allows adding new processor nodes to be used in the data processor */
@@ -690,7 +727,7 @@ namespace hex {
                 add(impl::Entry {
                     unlocalizedCategory,
                     unlocalizedName,
-                    [=, ...args = std::forward<Args>(args)] mutable {
+                    [=, ...args = std::forward<Args>(args)]() mutable {
                         auto node = std::make_unique<T>(std::forward<Args>(args)...);
                         node->setUnlocalizedName(unlocalizedName);
                         return node;
@@ -748,7 +785,7 @@ namespace hex {
                 struct MenuItem {
                     std::vector<UnlocalizedString> unlocalizedNames;
                     Icon icon;
-                    std::unique_ptr<Shortcut> shortcut;
+                    Shortcut shortcut;
                     View *view;
                     MenuCallback callback;
                     EnabledCallback enabledCallback;
@@ -971,7 +1008,7 @@ namespace hex {
             void add(bool addToList = true) {
                 auto typeName = T().getTypeName();
 
-                impl::add(typeName, [] -> std::unique_ptr<prv::Provider> {
+                impl::add(typeName, []() -> std::unique_ptr<prv::Provider> {
                     return std::make_unique<T>();
                 });
 
@@ -986,7 +1023,7 @@ namespace hex {
 
             namespace impl {
 
-                using Callback = std::function<std::string(prv::Provider *provider, u64 address, size_t size)>;
+                using Callback = std::function<std::string(prv::Provider *provider, u64 address, size_t size, bool preview)>;
                 struct ExportMenuEntry {
                     UnlocalizedString unlocalizedName;
                     Callback callback;
@@ -994,7 +1031,7 @@ namespace hex {
 
                 struct FindOccurrence {
                     Region region;
-                    enum class DecodeType { ASCII, Binary, UTF16, Unsigned, Signed, Float, Double } decodeType;
+                    enum class DecodeType { ASCII, UTF8, Binary, UTF16, Unsigned, Signed, Float, Double } decodeType;
                     std::endian endian = std::endian::native;
                     bool selected;
                 };
@@ -1079,9 +1116,9 @@ namespace hex {
 
                 [[nodiscard]] const UnlocalizedString& getUnlocalizedName() const { return m_unlocalizedName; }
 
-            protected:
-                const static int TextInputFlags;
+                [[nodiscard]] static int DefaultTextInputFlags();
 
+            protected:
                 bool drawDefaultScalarEditingTextBox(u64 address, const char *format, ImGuiDataType dataType, u8 *data, ImGuiInputTextFlags flags) const;
                 bool drawDefaultTextEditingTextBox(u64 address, std::string &data, ImGuiInputTextFlags flags) const;
 
@@ -1332,6 +1369,7 @@ namespace hex {
 
         }
 
+        /* Data Information Registry. Allows adding new analyzers to the data information view */
         namespace DataInformation {
 
             class InformationSection {
@@ -1393,6 +1431,54 @@ namespace hex {
             void addInformationSection(auto && ...args) {
                 impl::addInformationSectionCreator([args...] {
                     return std::make_unique<T>(std::forward<decltype(args)>(args)...);
+                });
+            }
+
+        }
+
+        /* Disassembler Registry. Allows adding new disassembler architectures */
+        namespace Disassembler {
+
+            struct Instruction {
+                u64 address;
+                u64 offset;
+                size_t size;
+                std::string bytes;
+                std::string mnemonic;
+                std::string operators;
+            };
+
+            class Architecture {
+            public:
+                explicit Architecture(std::string name) : m_name(std::move(name)) {}
+                virtual ~Architecture() = default;
+
+                virtual bool start() = 0;
+                virtual void end() = 0;
+
+                virtual std::optional<Instruction> disassemble(u64 imageBaseAddress, u64 instructionLoadAddress, u64 instructionDataAddress, std::span<const u8> code) = 0;
+                virtual void drawSettings() = 0;
+
+                [[nodiscard]] const std::string& getName() const { return m_name; }
+
+            private:
+                std::string m_name;
+            };
+
+            namespace impl {
+
+                using CreatorFunction = std::function<std::unique_ptr<Architecture>()>;
+
+                void addArchitectureCreator(CreatorFunction function);
+
+                const std::map<std::string, CreatorFunction>& getArchitectures();
+
+            }
+
+            template<std::derived_from<Architecture> T>
+            void add(auto && ...args) {
+                impl::addArchitectureCreator([...args = std::move(args)] {
+                    return std::make_unique<T>(args...);
                 });
             }
 

@@ -2,13 +2,14 @@
 
 #include <hex/api/content_registry.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/events/events_provider.hpp>
 
 #include <toasts/toast_notification.hpp>
 
 namespace hex::plugin::builtin {
 
     ViewProviderSettings::ViewProviderSettings() : View::Modal("hex.builtin.view.provider_settings.name") {
-        EventProviderCreated::subscribe(this, [this](const hex::prv::Provider *provider) {
+        EventProviderOpened::subscribe(this, [this](const hex::prv::Provider *provider) {
             if (provider->hasLoadInterface() && !provider->shouldSkipLoadInterface())
                 this->getWindowOpenState() = true;
         });
@@ -27,7 +28,7 @@ namespace hex::plugin::builtin {
     }
 
     ViewProviderSettings::~ViewProviderSettings() {
-        EventProviderCreated::unsubscribe(this);
+        EventProviderOpened::unsubscribe(this);
     }
 
     void ViewProviderSettings::drawContent() {

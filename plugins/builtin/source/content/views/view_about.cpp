@@ -14,12 +14,13 @@
 
 #include <content/popups/popup_docs_question.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <romfs/romfs.hpp>
 #include <wolv/utils/string.hpp>
 
 #include <string>
+#include <ui/menu_items.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -86,12 +87,17 @@ namespace hex::plugin::builtin {
         ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 2000);
 
         ContentRegistry::Interface::addMenuItemSubMenu({ "hex.builtin.menu.help" }, 3000, [] {
+            if (menu::isNativeMenuBarUsed())
+                return;
+
             static std::string content;
+            ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, 2_scaled);
             if (ImGui::InputTextWithHint("##search", "hex.builtin.view.help.documentation_search"_lang, content, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EscapeClearsAll | ImGuiInputTextFlags_EnterReturnsTrue)) {
-                PopupDocsQuestion::open(content);
+                openWebpage(fmt::format("https://docs.werwolv.net/imhex?q={}", content));
                 content.clear();
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::PopStyleVar();
         });
 
         ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 4000);
@@ -113,7 +119,7 @@ namespace hex::plugin::builtin {
 
             // Draw the ImHex icon
             if (!m_logoTexture.isValid())
-                m_logoTexture = ImGuiExt::Texture::fromImage(romfs::get("assets/common/logo.png").span(), ImGuiExt::Texture::Filter::Linear);
+                m_logoTexture = ImGuiExt::Texture::fromSVG(romfs::get("assets/common/logo.svg").span(), 0, 0, ImGuiExt::Texture::Filter::Linear);
 
             ImGui::Image(m_logoTexture, scaled({ 100, 100 }));
             if (ImGui::IsItemClicked()) {
@@ -149,14 +155,18 @@ namespace hex::plugin::builtin {
         ImGui::NewLine();
 
         struct DonationPage {
-            ImGuiExt::Texture texture;
-            const char *link;
+            DonationPage(const std::fs::path &path, const std::string &link) :
+                texture(ImGuiExt::Texture::fromImage(romfs::get(path).span<std::byte>(), ImGuiExt::Texture::Filter::Linear)),
+                link(std::move(link)) { }
+
+            AutoReset<ImGuiExt::Texture> texture;
+            std::string link;
         };
 
         static std::array DonationPages = {
-            DonationPage { ImGuiExt::Texture::fromImage(romfs::get("assets/common/donation/paypal.png").span<std::byte>(), ImGuiExt::Texture::Filter::Linear),  "https://werwolv.net/donate"           },
-            DonationPage { ImGuiExt::Texture::fromImage(romfs::get("assets/common/donation/github.png").span<std::byte>(), ImGuiExt::Texture::Filter::Linear),  "https://github.com/sponsors/WerWolv"  },
-            DonationPage { ImGuiExt::Texture::fromImage(romfs::get("assets/common/donation/patreon.png").span<std::byte>(), ImGuiExt::Texture::Filter::Linear), "https://patreon.com/werwolv"          },
+            DonationPage("assets/common/donation/paypal.png", "https://werwolv.net/donate"),
+            DonationPage("assets/common/donation/github.png", "https://github.com/sponsors/WerWolv"),
+            DonationPage("assets/common/donation/patreon.png", "https://patreon.com/werwolv")
         };
 
         if (ImGui::BeginTable("DonationLinks", 5, ImGuiTableFlags_SizingStretchSame)) {
@@ -166,9 +176,9 @@ namespace hex::plugin::builtin {
             for (const auto &page : DonationPages) {
                 ImGui::TableNextColumn();
 
-                const auto size = page.texture.getSize() / 1.5F;
+                const auto size = page.texture->getSize() / 1.5F;
                 const auto startPos = ImGui::GetCursorScreenPos();
-                ImGui::Image(page.texture, page.texture.getSize() / 1.5F);
+                ImGui::Image(*page.texture, page.texture->getSize() / 1.5F);
 
                 if (ImGui::IsItemHovered()) {
                     ImGui::GetForegroundDrawList()->AddShadowCircle(startPos + size / 2, size.x / 2, ImGui::GetColorU32(ImGuiCol_Button), 100.0F, ImVec2(), ImDrawFlags_ShadowCutOutShapeBackground);
@@ -193,7 +203,7 @@ namespace hex::plugin::builtin {
             ImGui::TableNextColumn();
             {
                 // Draw basic information about ImHex and its version
-                ImGuiExt::TextFormatted("ImHex Hex Editor v{} by WerWolv", ImHexApi::System::getImHexVersion());
+                ImGuiExt::TextFormatted("ImHex Hex Editor v{} by WerWolv", ImHexApi::System::getImHexVersion().get());
                 ImGui::Indent(25_scaled);
                 ImGuiExt::TextFormatted("Powered by Dear ImGui v{}", ImGui::GetVersion());
                 ImGui::Unindent(25_scaled);
@@ -354,7 +364,7 @@ namespace hex::plugin::builtin {
                     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 50);
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, scaled({ 12, 3 }));
 
-                    if (ImGui::BeginChild(library.link, ImVec2(), ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY)) {
+                    if (ImGui::BeginChild(library.link, ImVec2(), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY)) {
                         if (ImGuiExt::Hyperlink(hex::format("{}/{}", library.author, library.name).c_str())) {
                             hex::openWebpage(library.link);
                         }
@@ -476,6 +486,7 @@ namespace hex::plugin::builtin {
                 { "Custom data processor nodes",    &paths::Nodes                },
                 { "Layouts",                        &paths::Layouts              },
                 { "Workspaces",                     &paths::Workspaces           },
+                { "Disassemblers",                  &paths::Disassemblers        },
             }
         };
         static_assert(PathTypes.back().first != nullptr, "All path items need to be populated!");
@@ -582,9 +593,9 @@ namespace hex::plugin::builtin {
         static ReleaseNotes notes;
 
         // Set up the request to get the release notes the first time the page is opened
-        const static auto ImHexVersionString = ImHexApi::System::getImHexVersion(false);
+        const static auto ImHexVersion = ImHexApi::System::getImHexVersion();
         AT_FIRST_TIME {
-            static HttpRequest request("GET", GitHubApiURL + std::string("/releases/") + (ImHexVersionString.ends_with(".WIP") ? "latest" : ( "tags/v" + ImHexVersionString)));
+            static HttpRequest request("GET", GitHubApiURL + std::string("/releases/") + (ImHexVersion.nightly() ? "latest" : ( "tags/v" + ImHexVersion.get(false))));
 
             m_releaseNoteRequest = request.execute();
         };

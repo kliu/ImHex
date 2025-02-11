@@ -2,6 +2,7 @@
 
 #include <hex/api/task_manager.hpp>
 #include <hex/api/content_registry.hpp>
+#include <ui/visualizer_drawer.hpp>
 
 #include <pl/patterns/pattern.hpp>
 #include <pl/pattern_visitor.hpp>
@@ -9,6 +10,7 @@
 #include <pl/formatters.hpp>
 
 #include <set>
+#include <pl/patterns/pattern_error.hpp>
 
 struct ImGuiTableSortSpecs;
 
@@ -35,6 +37,8 @@ namespace hex::ui {
         void setHoverCallback(std::function<void(const pl::ptrn::Pattern *)> callback) { m_hoverCallback = std::move(callback); }
         void enableRowColoring(bool enabled) { m_rowColoring = enabled; }
         void enablePatternEditing(bool enabled) { m_editingEnabled = enabled; }
+        void setMaxFilterDisplayItems(u32 count) { m_maxFilterDisplayItems = count; }
+
         void reset();
 
         void jumpToPattern(const pl::ptrn::Pattern *pattern) { m_jumpToPattern = pattern; }
@@ -61,6 +65,8 @@ namespace hex::ui {
         void visit(pl::ptrn::PatternUnsigned& pattern) override;
         void visit(pl::ptrn::PatternWideCharacter& pattern) override;
         void visit(pl::ptrn::PatternWideString& pattern) override;
+        void visit(pl::ptrn::PatternError& pattern) override;
+        void visit(pl::ptrn::Pattern& pattern) override;
 
     private:
         constexpr static auto ChunkSize = 512;
@@ -71,7 +77,6 @@ namespace hex::ui {
         void makeSelectable(const pl::ptrn::Pattern &pattern);
 
         void drawValueColumn(pl::ptrn::Pattern& pattern);
-        void drawVisualizer(const std::map<std::string, ContentRegistry::PatternLanguage::impl::Visualizer> &visualizers, const std::vector<pl::core::Token::Literal> &arguments, pl::ptrn::Pattern &pattern, bool reset);
         void drawFavoriteColumn(const pl::ptrn::Pattern& pattern);
         bool drawNameColumn(const pl::ptrn::Pattern &pattern, bool leaf = false);
         void drawColorColumn(const pl::ptrn::Pattern& pattern);
@@ -88,6 +93,8 @@ namespace hex::ui {
         void traversePatternTree(pl::ptrn::Pattern &pattern, std::vector<std::string> &patternPath, const std::function<void(pl::ptrn::Pattern&)> &callback);
         [[nodiscard]] std::string getDisplayName(const pl::ptrn::Pattern& pattern) const;
 
+        [[nodiscard]] std::vector<std::string> getPatternPath(const pl::ptrn::Pattern *pattern) const;
+
         struct Filter {
             std::vector<std::string> path;
             std::optional<pl::core::Token::Literal> value;
@@ -103,6 +110,7 @@ namespace hex::ui {
 
         const pl::ptrn::Pattern *m_editingPattern = nullptr;
         u64 m_editingPatternOffset = 0;
+        hex::ui::VisualizerDrawer m_visualizerDrawer;
 
         TreeStyle m_treeStyle = TreeStyle::Default;
         bool m_rowColoring = false;
@@ -111,7 +119,6 @@ namespace hex::ui {
         const pl::ptrn::Pattern *m_jumpToPattern = nullptr;
 
         std::set<pl::ptrn::Pattern*> m_visualizedPatterns;
-        std::string m_lastVisualizerError;
 
         std::string m_filterText;
         Filter m_filter;
@@ -130,5 +137,8 @@ namespace hex::ui {
         std::function<void(const pl::ptrn::Pattern *)> m_hoverCallback = [](const pl::ptrn::Pattern *) { };
 
         pl::gen::fmt::FormatterArray m_formatters;
+        u64 m_lastRunId = 0;
+
+        u32 m_maxFilterDisplayItems = 128;
     };
 }

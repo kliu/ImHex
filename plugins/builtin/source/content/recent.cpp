@@ -1,7 +1,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include <hex/api/event_manager.hpp>
+#include <hex/api/events/events_provider.hpp>
+#include <hex/api/events/events_lifecycle.hpp>
 #include <hex/api/content_registry.hpp>
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/task_manager.hpp>
@@ -16,10 +17,11 @@
 
 #include <content/recent.hpp>
 #include <toasts/toast_notification.hpp>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <ranges>
 #include <unordered_set>
+#include <ui/menu_items.hpp>
 
 namespace hex::plugin::builtin::recent {
 
@@ -149,7 +151,7 @@ namespace hex::plugin::builtin::recent {
     }
 
     void updateRecentEntries() {
-        TaskManager::createBackgroundTask("hex.builtin.task.updating_recents"_lang, [](auto&) {
+        TaskManager::createBackgroundTask("hex.builtin.task.updating_recents", [](auto&) {
             if (s_recentEntriesUpdating)
                 return;
 
@@ -236,15 +238,17 @@ namespace hex::plugin::builtin::recent {
             }
             return;
         }
+
         auto *provider = ImHexApi::Provider::createProvider(recentEntry.type, true);
         if (provider != nullptr) {
             provider->loadSettings(recentEntry.data);
 
-            if (!provider->open() || !provider->isAvailable()) {
-                ui::ToastError::open(hex::format("hex.builtin.provider.error.open"_lang, provider->getErrorMessage()));
-                TaskManager::doLater([provider] { ImHexApi::Provider::remove(provider); });
-                return;
-            }
+            TaskManager::createBlockingTask("hex.builtin.provider.opening", TaskManager::NoProgress, [provider]() {
+                if (!provider->open() || !provider->isAvailable()) {
+                    ui::ToastError::open(hex::format("hex.builtin.provider.error.open"_lang, provider->getErrorMessage()));
+                    TaskManager::doLater([provider] { ImHexApi::Provider::remove(provider); });
+                }
+            });
 
             EventProviderOpened::post(provider);
 
@@ -320,7 +324,7 @@ namespace hex::plugin::builtin::recent {
                     }
 
                     if (ImGui::BeginPopup(popupID.c_str())) {
-                        if (ImGui::MenuItem("hex.ui.common.remove"_lang)) {
+                        if (ImGui::MenuItemEx("hex.ui.common.remove"_lang, ICON_VS_REMOVE)) {
                             shouldRemove = true;
                         }
                         ImGui::EndPopup();
@@ -347,18 +351,22 @@ namespace hex::plugin::builtin::recent {
     }
 
     void addMenuItems() {
+        #if defined(OS_WEB)
+            return;
+        #endif
+
         ContentRegistry::Interface::addMenuItemSubMenu({ "hex.builtin.menu.file" }, 1200, [] {
-            if (ImGui::BeginMenuEx("hex.builtin.menu.file.open_recent"_lang, ICON_VS_ARCHIVE, !recent::s_recentEntriesUpdating && !s_recentEntries.empty())) {
+            if (menu::beginMenuEx("hex.builtin.menu.file.open_recent"_lang, ICON_VS_ARCHIVE, !recent::s_recentEntriesUpdating && !s_recentEntries.empty())) {
                 // Copy to avoid changing list while iteration
                 auto recentEntries = s_recentEntries;
                 for (auto &recentEntry : recentEntries) {
-                    if (ImGui::MenuItem(recentEntry.displayName.c_str())) {
+                    if (menu::menuItem(recentEntry.displayName.c_str())) {
                         loadRecentEntry(recentEntry);
                     }
                 }
 
-                ImGui::Separator();
-                if (ImGui::MenuItem("hex.builtin.menu.file.clear_recent"_lang)) {
+                menu::menuSeparator();
+                if (menu::menuItem("hex.builtin.menu.file.clear_recent"_lang)) {
                     s_recentEntries.clear();
 
                     // Remove all recent files
@@ -368,7 +376,7 @@ namespace hex::plugin::builtin::recent {
                     }
                 }
 
-                ImGui::EndMenu();
+                menu::endMenu();
             }
         });
     }

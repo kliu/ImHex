@@ -6,10 +6,9 @@
 #include <hex/helpers/utils.hpp>
 #include <hex/providers/buffered_reader.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <bit>
-#include <codecvt>
 
 namespace hex::plugin::builtin {
 
@@ -46,7 +45,7 @@ namespace hex::plugin::builtin {
             ImGui::EndTabBar();
         }
 
-        if(ImGuiExt::IconHyperlink(ICON_VS_SEARCH, "hex.builtin.view.hex_editor.search.advanced"_lang)) {
+        if (ImGuiExt::IconHyperlink(ICON_VS_SEARCH, "hex.builtin.view.hex_editor.search.advanced"_lang)) {
             TaskManager::doLater([editor] {
                 const auto& view = ContentRegistry::Views::getViewByName("hex.builtin.view.find.name");
 
@@ -87,7 +86,7 @@ namespace hex::plugin::builtin {
             this->processInputString();
 
             if (!m_searchTask.isRunning() && !m_searchByteSequence.empty()) {
-                m_searchTask = TaskManager::createTask("hex.ui.common.processing"_lang,
+                m_searchTask = TaskManager::createTask("hex.ui.common.processing",
                                                        ImHexApi::Provider::get()->getActualSize(),
                                                        doSearch);
             }
@@ -286,28 +285,30 @@ namespace hex::plugin::builtin {
                         break;
                     }
                     case Encoding::UTF16: {
-                        std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> convert16;
-                        auto utf16 = convert16.from_bytes(s_inputString);
+                        auto utf16 = wolv::util::utf8ToUtf16(s_inputString);
+                        if (!utf16.has_value())
+                            return;
 
-                        for (auto &c: utf16) {
+                        for (auto &c : *utf16) {
                             swapEndianness(c, Encoding::UTF16, m_stringEndianness);
                         }
 
-                        std::copy(reinterpret_cast<const u8 *>(utf16.data()),
-                                  reinterpret_cast<const u8 *>(utf16.data() + utf16.size()),
+                        std::copy(reinterpret_cast<const u8 *>(utf16->data()),
+                                  reinterpret_cast<const u8 *>(utf16->data() + utf16->size()),
                                   std::back_inserter(m_searchByteSequence));
                         break;
                     }
                     case Encoding::UTF32: {
-                        std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> convert32;
-                        auto utf32 = convert32.from_bytes(s_inputString);
+                        auto utf32 = wolv::util::utf8ToUtf32(s_inputString);
+                        if (!utf32.has_value())
+                            return;
 
-                        for (auto &c: utf32) {
+                        for (auto &c : *utf32) {
                             swapEndianness(c, Encoding::UTF32, m_stringEndianness);
                         }
 
-                        std::copy(reinterpret_cast<const u8 *>(utf32.data()),
-                                  reinterpret_cast<const u8 *>(utf32.data() + utf32.size()),
+                        std::copy(reinterpret_cast<const u8 *>(utf32->data()),
+                                  reinterpret_cast<const u8 *>(utf32->data() + utf32->size()),
                                   std::back_inserter(m_searchByteSequence));
                         break;
                     }

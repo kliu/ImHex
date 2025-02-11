@@ -1,19 +1,26 @@
 #include <hex/api/content_registry.hpp>
-#include <hex/api/event_manager.hpp>
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/task_manager.hpp>
 #include <hex/api/project_file_manager.hpp>
+#include <hex/api/events/events_gui.hpp>
+#include <hex/api/events/requests_gui.hpp>
 
 #include <hex/ui/view.hpp>
 #include <hex/helpers/utils.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <random>
 #include <hex/ui/imgui_imhex_extensions.h>
+#include <ui/menu_items.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
+#include <hex/api/tutorial_manager.hpp>
+#include <hex/helpers/auto_reset.hpp>
 #include <romfs/romfs.hpp>
 #include <wolv/utils/guards.hpp>
+
+#include <GLFW/glfw3.h>
 
 namespace hex::plugin::builtin {
 
@@ -24,28 +31,41 @@ namespace hex::plugin::builtin {
 
         std::string s_windowTitle, s_windowTitleFull;
         u32 s_searchBarPosition = 0;
-        ImGuiExt::Texture s_logoTexture;
+        AutoReset<ImGuiExt::Texture> s_logoTexture;
         bool s_showSearchBar = true;
+        bool s_displayShortcutHighlights = true;
+        bool s_useNativeMenuBar = false;
 
-        void createNestedMenu(std::span<const UnlocalizedString> menuItems, const char *icon, const Shortcut &shortcut, const ContentRegistry::Interface::impl::MenuCallback &callback, const ContentRegistry::Interface::impl::EnabledCallback &enabledCallback, const ContentRegistry::Interface::impl::SelectedCallback &selectedCallback) {
+        void createNestedMenu(std::span<const UnlocalizedString> menuItems, const char *icon, const Shortcut &shortcut, View *view, const ContentRegistry::Interface::impl::MenuCallback &callback, const ContentRegistry::Interface::impl::EnabledCallback &enabledCallback, const ContentRegistry::Interface::impl::SelectedCallback &selectedCallback) {
             const auto &name = menuItems.front();
 
             if (name.get() == ContentRegistry::Interface::impl::SeparatorValue) {
-                ImGui::Separator();
+                menu::menuSeparator();
                 return;
             }
 
             if (name.get() == ContentRegistry::Interface::impl::SubMenuValue) {
-                callback();
-            } else if (menuItems.size() == 1) {
-                if (ImGui::MenuItemEx(Lang(name), icon, shortcut.toString().c_str(), selectedCallback(), enabledCallback()))
+                if (enabledCallback()) {
                     callback();
+                }
+            } else if (menuItems.size() == 1) {
+                if (menu::menuItemEx(Lang(name), icon, shortcut, selectedCallback(), enabledCallback())) {
+                    if (shortcut == Shortcut::None)
+                        callback();
+                    else {
+                        if (!ShortcutManager::runShortcut(shortcut, ContentRegistry::Views::getFocusedView())) {
+                            if (!ShortcutManager::runShortcut(shortcut)) {
+                                callback();
+                            }
+                        }
+                    }
+                }
             } else {
                 bool isSubmenu = (menuItems.begin() + 1)->get() == ContentRegistry::Interface::impl::SubMenuValue;
 
-                if (ImGui::BeginMenuEx(Lang(name), std::next(menuItems.begin())->get() == ContentRegistry::Interface::impl::SubMenuValue ? icon : nullptr, isSubmenu ? enabledCallback() : true)) {
-                    createNestedMenu({ std::next(menuItems.begin()), menuItems.end() }, icon, shortcut, callback, enabledCallback, selectedCallback);
-                    ImGui::EndMenu();
+                if (menu::beginMenuEx(Lang(name), std::next(menuItems.begin())->get() == ContentRegistry::Interface::impl::SubMenuValue ? icon : nullptr, isSubmenu ? enabledCallback() : true)) {
+                    createNestedMenu({ std::next(menuItems.begin()), menuItems.end() }, icon, shortcut, view, callback, enabledCallback, selectedCallback);
+                    menu::endMenu();
                 }
             }
         }
@@ -75,7 +95,7 @@ namespace hex::plugin::builtin {
         void drawSidebar(ImVec2 dockSpaceSize, ImVec2 sidebarPos, float sidebarWidth) {
             static i32 openWindow = -1;
             u32 index = 0;
-            u32 drawIndex = 0;
+            u32 drawIndex = 1;
             ImGui::PushID("SideBarWindows");
             for (const auto &[icon, callback, enabledCallback] : ContentRegistry::Interface::impl::getSidebarItems()) {
                 ImGui::SetCursorPosY(sidebarPos.y + sidebarWidth * drawIndex);
@@ -105,7 +125,6 @@ namespace hex::plugin::builtin {
 
                 bool open = static_cast<u32>(openWindow) == index;
                 if (open) {
-
                     ImGui::SetNextWindowPos(ImGui::GetWindowPos() + sidebarPos + ImVec2(sidebarWidth - 1_scaled, -1_scaled));
                     ImGui::SetNextWindowSizeConstraints(ImVec2(0, dockSpaceSize.y + 5_scaled), ImVec2(FLT_MAX, dockSpaceSize.y + 5_scaled));
 
@@ -120,6 +139,11 @@ namespace hex::plugin::builtin {
                         if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !sideBarFocused) {
                             openWindow = -1;
                         }
+
+                        ImGuiExt::DisableWindowResize(ImGuiDir_Up);
+                        ImGuiExt::DisableWindowResize(ImGuiDir_Down);
+                        ImGuiExt::DisableWindowResize(ImGuiDir_Left);
+
                     }
                     ImGui::End();
                     ImGui::PopStyleVar();
@@ -201,7 +225,7 @@ namespace hex::plugin::builtin {
 
             // Draw custom title bar buttons
             if (!titleBarButtons.empty()) {
-                ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 7_scaled - buttonSize.x * float((titleBarButtonsVisible ? 4 : 0) + titleBarButtons.size()));
+                ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 7_scaled - (buttonSize.x + ImGui::GetStyle().ItemSpacing.x) * float((titleBarButtonsVisible ? 4 : 0) + titleBarButtons.size()));
 
                 if (ImGui::GetCursorPosX() > (searchBoxPos.x + searchBoxSize.x)) {
                     for (const auto &[icon, tooltip, callback] : titleBarButtons) {
@@ -279,69 +303,85 @@ namespace hex::plugin::builtin {
                     toolbarIndex
                 ] = menuItem;
 
-                createNestedMenu(unlocalizedNames | std::views::drop(1), icon.glyph.c_str(), *shortcut, callback, enabledCallback, selectedCallack);
+                createNestedMenu(unlocalizedNames | std::views::drop(1), icon.glyph.c_str(), shortcut, view, callback, enabledCallback, selectedCallack);
             }
         }
 
         void defineMenu(const UnlocalizedString &menuName) {
-            if (ImGui::BeginMenu(Lang(menuName))) {
+            if (menu::beginMenu(Lang(menuName))) {
                 populateMenu(menuName);
-                ImGui::EndMenu();
+                menu::endMenu();
+            } else {
+                if (s_displayShortcutHighlights) {
+                    if (const auto lastShortcutMenu = ShortcutManager::getLastActivatedMenu(); lastShortcutMenu.has_value()) {
+                        if (menuName == *lastShortcutMenu) {
+                            ImGui::NavHighlightActivated(ImGui::GetItemID());
+                        }
+                    }
+                }
             }
+
         }
 
         void drawMenu() {
-            auto cursorPos = ImGui::GetCursorPosX();
-            u32 fittingItems = 0;
-
             const auto &menuItems = ContentRegistry::Interface::impl::getMainMenuItems();
-            for (const auto &[priority, menuItem] : menuItems) {
-                auto menuName = Lang(menuItem.unlocalizedName);
 
-                const auto padding = ImGui::GetStyle().FramePadding.x;
-                bool lastItem = (fittingItems + 1) == menuItems.size();
-                auto width = ImGui::CalcTextSize(menuName).x + padding * (lastItem ? -3.0F : 4.0F);
-
-                if ((cursorPos + width) > (s_searchBarPosition - ImGui::CalcTextSize(ICON_VS_ELLIPSIS).x - padding * 2))
-                    break;
-
-                cursorPos += width;
-                fittingItems += 1;
-            }
-
-            if (fittingItems <= 2)
-                fittingItems = 0;
-
-            {
-                u32 count = 0;
+            if (menu::isNativeMenuBarUsed()) {
                 for (const auto &[priority, menuItem] : menuItems) {
-                    if (count >= fittingItems)
+                    defineMenu(menuItem.unlocalizedName);
+                }
+            } else {
+                auto cursorPos = ImGui::GetCursorPosX();
+                u32 fittingItems = 0;
+
+                for (const auto &[priority, menuItem] : menuItems) {
+                    auto menuName = Lang(menuItem.unlocalizedName);
+
+                    const auto padding = ImGui::GetStyle().FramePadding.x;
+                    bool lastItem = (fittingItems + 1) == menuItems.size();
+                    auto width = ImGui::CalcTextSize(menuName).x + padding * (lastItem ? -3.0F : 4.0F);
+
+                    if ((cursorPos + width) > (s_searchBarPosition - ImGui::CalcTextSize(ICON_VS_ELLIPSIS).x - padding * 2))
                         break;
 
-                    defineMenu(menuItem.unlocalizedName);
-
-                    count += 1;
+                    cursorPos += width;
+                    fittingItems += 1;
                 }
-            }
 
-            if (fittingItems == 0) {
-                if (ImGui::BeginMenu(ICON_VS_MENU)) {
+                if (fittingItems <= 2)
+                    fittingItems = 0;
+
+                {
+                    u32 count = 0;
                     for (const auto &[priority, menuItem] : menuItems) {
-                        defineMenu(menuItem.unlocalizedName);
-                    }
-                    ImGui::EndMenu();
-                }
-            } else if (fittingItems < menuItems.size()) {
-                u32 count = 0;
-                if (ImGui::BeginMenu(ICON_VS_ELLIPSIS)) {
-                    for (const auto &[priority, menuItem] : menuItems) {
-                        ON_SCOPE_EXIT { count += 1; };
-                        if (count < fittingItems)
-                            continue;
+                        if (count >= fittingItems)
+                            break;
 
                         defineMenu(menuItem.unlocalizedName);
+
+                        count += 1;
                     }
-                    ImGui::EndMenu();
+                }
+
+                if (fittingItems == 0) {
+                    if (ImGui::BeginMenu(ICON_VS_MENU)) {
+                        for (const auto &[priority, menuItem] : menuItems) {
+                            defineMenu(menuItem.unlocalizedName);
+                        }
+                        ImGui::EndMenu();
+                    }
+                } else if (fittingItems < menuItems.size()) {
+                    u32 count = 0;
+                    if (ImGui::BeginMenu(ICON_VS_ELLIPSIS)) {
+                        for (const auto &[priority, menuItem] : menuItems) {
+                            ON_SCOPE_EXIT { count += 1; };
+                            if (count < fittingItems)
+                                continue;
+
+                            defineMenu(menuItem.unlocalizedName);
+                        }
+                        ImGui::EndMenu();
+                    }
                 }
             }
         }
@@ -356,17 +396,13 @@ namespace hex::plugin::builtin {
                 ON_SCOPE_EXIT { ImGui::PopStyleVar(); };
             #endif
 
-            if (ImGui::BeginMainMenuBar()) {
-                ImGui::Dummy({});
-
-                auto window = ImHexApi::System::getMainWindowHandle();
-
-                ImGui::PopStyleVar(2);
-
+            auto window = ImHexApi::System::getMainWindowHandle();
+            menu::enableNativeMenuBar(s_useNativeMenuBar);
+            if (menu::beginMainMenuBar()) {
                 if (ImHexApi::System::isBorderlessWindowModeEnabled()) {
                     #if defined(OS_WINDOWS)
                         ImGui::SetCursorPosX(5_scaled);
-                        ImGui::Image(s_logoTexture, ImVec2(menuBarHeight, menuBarHeight));
+                        ImGui::Image(*s_logoTexture, s_logoTexture->getSize() * u32(1_scaled));
                         ImGui::SetCursorPosX(5_scaled);
                         ImGui::InvisibleButton("##logo", ImVec2(menuBarHeight, menuBarHeight));
                         if (ImGui::IsItemHovered() && ImGui::IsAnyMouseDown())
@@ -381,23 +417,31 @@ namespace hex::plugin::builtin {
                     bool maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED);
 
                     ImGui::BeginDisabled(!maximized);
-                    if (ImGui::MenuItem(ICON_VS_CHROME_RESTORE " Restore"))  glfwRestoreWindow(window);
+                    if (ImGui::MenuItemEx("Restore", ICON_VS_CHROME_RESTORE)) glfwRestoreWindow(window);
                     ImGui::EndDisabled();
 
-                    if (ImGui::MenuItem(ICON_VS_CHROME_MINIMIZE " Minimize")) glfwIconifyWindow(window);
+                    if (ImGui::MenuItemEx("Minimize", ICON_VS_CHROME_MINIMIZE)) glfwIconifyWindow(window);
 
                     ImGui::BeginDisabled(maximized);
-                    if (ImGui::MenuItem(ICON_VS_CHROME_MAXIMIZE " Maximize")) glfwMaximizeWindow(window);
+                    if (ImGui::MenuItemEx("Maximize", ICON_VS_CHROME_MAXIMIZE)) glfwMaximizeWindow(window);
                     ImGui::EndDisabled();
 
                     ImGui::Separator();
 
-                    if (ImGui::MenuItem(ICON_VS_CHROME_CLOSE " Close"))    ImHexApi::System::closeImHex();
+                    if (ImGui::MenuItemEx("Close", ICON_VS_CHROME_CLOSE)) ImHexApi::System::closeImHex();
 
                     ImGui::EndPopup();
                 }
-
                 drawMenu();
+                menu::endMainMenuBar();
+            }
+            menu::enableNativeMenuBar(false);
+
+            if (ImGui::BeginMainMenuBar()) {
+                ImGui::Dummy({});
+
+                ImGui::PopStyleVar(2);
+
                 drawTitleBar();
 
                 #if defined(OS_MACOS)
@@ -406,10 +450,19 @@ namespace hex::plugin::builtin {
                         const auto menuUnderlaySize = ImVec2(windowSize.x, ImGui::GetCurrentWindowRead()->MenuBarHeight);
                         
                         ImGui::SetCursorPos(ImVec2());
-                        
-                        // Drawing this button late allows widgets rendered before it to grab click events, forming an "input underlay"
-                        if (ImGui::InvisibleButton("##mainMenuUnderlay", menuUnderlaySize, ImGuiButtonFlags_PressedOnDoubleClick)) {
-                            macosHandleTitlebarDoubleClickGesture(window);
+
+                        // Prevent window from being moved unless title bar is hovered
+
+                        if (!ImGui::IsAnyItemHovered()) {
+                            const auto cursorPos = ImGui::GetCursorScreenPos();
+                            if (ImGui::IsMouseHoveringRect(cursorPos, cursorPos + menuUnderlaySize) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                macosHandleTitlebarDoubleClickGesture(window);
+                            }
+
+                            macosSetWindowMovable(window, true);
+                        } else {
+                            macosSetWindowMovable(window, false);
+
                         }
                     }
                 #endif
@@ -535,21 +588,21 @@ namespace hex::plugin::builtin {
                 const auto &[unlocalizedNames, icon, shortcut, view, callback, enabledCallback, selectedCallback, toolbarIndex] = menuItem;
 
                 if (ImGui::BeginPopup(unlocalizedNames.front().get().c_str())) {
-                    createNestedMenu({ unlocalizedNames.begin() + 1, unlocalizedNames.end() }, icon.glyph.c_str(), *shortcut, callback, enabledCallback, selectedCallback);
+                    createNestedMenu({ unlocalizedNames.begin() + 1, unlocalizedNames.end() }, icon.glyph.c_str(), shortcut, view, callback, enabledCallback, selectedCallback);
                     ImGui::EndPopup();
                 }
             }
         });
 
+        constexpr static auto DefaultImHexTitle = "ImHex";
+        static std::string s_applicationName = DefaultImHexTitle;
 
-        constexpr static auto ImHexTitle = "ImHex";
-
-        s_windowTitle = ImHexTitle;
+        s_windowTitle = DefaultImHexTitle;
 
         // Handle updating the window title
         RequestUpdateWindowTitle::subscribe([] {
             std::string prefix, postfix;
-            std::string title = ImHexTitle;
+            std::string title = DefaultImHexTitle;
 
             if (ProjectFile::hasPath()) {
                 // If a project is open, show the project name instead of the file name
@@ -578,8 +631,10 @@ namespace hex::plugin::builtin {
 
             auto window = ImHexApi::System::getMainWindowHandle();
             if (window != nullptr) {
-                if (title != ImHexTitle)
-                    title = std::string(ImHexTitle) + " - " + title;
+                if (title != DefaultImHexTitle)
+                    title = std::string(DefaultImHexTitle) + " - " + title;
+
+                title = wolv::util::replaceStrings(title, DefaultImHexTitle, s_applicationName);
 
                 glfwSetWindowTitle(window, title.c_str());
             }
@@ -587,6 +642,28 @@ namespace hex::plugin::builtin {
 
         ContentRegistry::Settings::onChange("hex.builtin.setting.interface", "hex.builtin.setting.interface.show_header_command_palette", [](const ContentRegistry::Settings::SettingsValue &value) {
             s_showSearchBar = value.get<bool>(true);
+        });
+
+        ContentRegistry::Settings::onChange("hex.builtin.setting.interface", "hex.builtin.setting.interface.display_shortcut_highlights", [](const ContentRegistry::Settings::SettingsValue &value) {
+            s_displayShortcutHighlights = value.get<bool>(true);
+        });
+
+        ContentRegistry::Settings::onChange("hex.builtin.setting.interface", "hex.builtin.setting.interface.use_native_menu_bar", [](const ContentRegistry::Settings::SettingsValue &value) {
+            s_useNativeMenuBar = value.get<bool>(true);
+        });
+
+        ContentRegistry::Settings::onChange("hex.builtin.setting.interface", "hex.builtin.setting.interface.randomize_window_title", [](const ContentRegistry::Settings::SettingsValue &value) {
+            const bool randomTitle = value.get<bool>(false);
+            if (randomTitle) {
+                s_applicationName.clear();
+                std::mt19937_64 rng(std::random_device{}());
+                for (u32 i = 0; i < 24; i += 1) {
+                    s_applicationName += char(rng() % ('Z' - 'A' + 1)) + 'A';
+                }
+            } else {
+                s_applicationName = DefaultImHexTitle;
+            }
+            RequestUpdateWindowTitle::post();
         });
     }
 

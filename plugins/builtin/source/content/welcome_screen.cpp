@@ -1,13 +1,16 @@
 #include <hex.hpp>
 
 #include <hex/api/workspace_manager.hpp>
-#include <hex/api/event_manager.hpp>
 #include <hex/api/content_registry.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/theme_manager.hpp>
 #include <hex/api/layout_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
 #include <hex/api_urls.hpp>
+
+#include <hex/api/events/events_provider.hpp>
+#include <hex/api/events/events_gui.hpp>
+#include <hex/api/events/requests_gui.hpp>
 
 #include <hex/ui/view.hpp>
 #include <toasts/toast_notification.hpp>
@@ -28,7 +31,7 @@
 #include <wolv/io/file.hpp>
 #include <wolv/io/fs.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <content/recent.hpp>
 
@@ -38,7 +41,7 @@
 namespace hex::plugin::builtin {
 
     namespace {
-        ImGuiExt::Texture s_bannerTexture, s_nightlyTexture, s_backdropTexture, s_infoBannerTexture;
+        AutoReset<ImGuiExt::Texture> s_bannerTexture, s_nightlyTexture, s_backdropTexture, s_infoBannerTexture;
 
         std::string s_tipOfTheDay;
 
@@ -96,7 +99,7 @@ namespace hex::plugin::builtin {
                                 }
                             }
 
-                            TaskManager::createBackgroundTask("hex.builtin.task.uploading_crash"_lang, [path = m_logFilePath, data](auto&){
+                            TaskManager::createBackgroundTask("hex.builtin.task.uploading_crash", [path = m_logFilePath, data](auto&){
                                 HttpRequest request("POST", ImHexApiURL + std::string("/crash_upload"));
                                 request.uploadFile(std::vector<u8>(data.begin(), data.end()), "file", path.filename()).wait();
                             });
@@ -151,6 +154,107 @@ namespace hex::plugin::builtin {
                 });
         }
 
+        void drawTiles(ImDrawList *drawList, ImVec2 position, ImVec2 size, float lineDistance) {
+            const auto tileCount = size / lineDistance;
+
+            struct Segment {
+                i32 x, y;
+                bool operator==(const Segment&) const = default;
+            };
+            static std::list<Segment> segments;
+            static std::optional<Segment> colTile;
+            static ImGuiDir direction;
+            static auto rng = std::mt19937(std::random_device{}());
+            static bool over = true;
+            static i32 overCounter = 0;
+            static u32 spaceCount = 0;
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+                spaceCount += 1;
+
+                if (spaceCount >= 5) {
+                    spaceCount = 0;
+                    segments = { { 10, 10 }, { 10, 11 }, { 10, 12 } };
+                    direction = ImGuiDir_Right;
+                    colTile.reset();
+                    over = false;
+                }
+            }
+
+            if (over)
+                return;
+
+            const auto drawTile = [&](u32 x, u32 y) {
+                drawList->AddRectFilled(
+                    {
+                        position.x + (float(x) * lineDistance),
+                        position.y + (float(y) * lineDistance)
+                    },
+                    {
+                        position.x + (float(x + 1) * lineDistance) - 1_scaled,
+                        position.y + (float(y + 1) * lineDistance) - 1_scaled
+                    }, ImGui::GetColorU32(ImGuiCol_Text, 0.1F)
+                );
+            };
+
+            if (colTile.has_value()) {
+                drawTile(colTile->x, colTile->y);
+            }
+
+            for (const auto &[x, y] : segments) {
+                drawTile(x, y);
+            }
+
+            if (overCounter != 0) {
+                for (u32 x = 0; x < u32(tileCount.x); x += 1) {
+                    for (u32 y = 0; y < u32(tileCount.y); y += 1) {
+                        if ((x + y) % 2 == u32(overCounter % 2))
+                            drawTile(x, y);
+                    }
+                }
+            }
+
+            static double lastTick = 0;
+            double tick = ImGui::GetTime();
+            if (lastTick + 0.2 < tick) {
+                Segment nextSegment = segments.front();
+                switch (direction) {
+                    case ImGuiDir_Up:       nextSegment.y -= 1; break;
+                    case ImGuiDir_Down:     nextSegment.y += 1; break;
+                    case ImGuiDir_Left:     nextSegment.x -= 1; break;
+                    case ImGuiDir_Right:    nextSegment.x += 1; break;
+                    default: break;
+                }
+
+                if (overCounter == 0) {
+                    for (const auto &segment : segments) {
+                        if (segment == nextSegment) overCounter = 5;
+                        if (segment.x < 0 || segment.y < 0) overCounter = 5;
+                        if (segment.x > i32(tileCount.x) || segment.y > i32(tileCount.y)) overCounter = 5;
+                    }
+
+                    segments.push_front(nextSegment);
+
+                    if (colTile.has_value() && nextSegment != *colTile) {
+                        segments.pop_back();
+                    } else {
+                        colTile = { i32(rng() % u32(tileCount.x)), i32(rng() % u32(tileCount.x)) };
+                    }
+                } else {
+                    overCounter -= 1;
+                    if (overCounter <= 0)
+                      over = true;
+                }
+
+                lastTick = tick;
+            }
+
+            if (ImGui::IsKeyDown(ImGuiKey_UpArrow)    && direction != ImGuiDir_Down)   direction = ImGuiDir_Up;
+            if (ImGui::IsKeyDown(ImGuiKey_DownArrow)  && direction != ImGuiDir_Up)     direction = ImGuiDir_Down;
+            if (ImGui::IsKeyDown(ImGuiKey_LeftArrow)  && direction != ImGuiDir_Right)  direction = ImGuiDir_Left;
+            if (ImGui::IsKeyDown(ImGuiKey_RightArrow) && direction != ImGuiDir_Left)   direction = ImGuiDir_Right;
+        }
+
         void drawWelcomeScreenBackground() {
             const auto position = ImGui::GetWindowPos();
             const auto size = ImGui::GetWindowSize();
@@ -165,12 +269,14 @@ namespace hex::plugin::builtin {
             for (auto y = position.y; y < position.y + size.y + lineDistance; y += lineDistance) {
                 drawList->AddLine({ position.x, y }, { position.x + size.x, y }, lineColor);
             }
+
+            drawTiles(drawList, position, size, lineDistance);
         }
 
         void drawWelcomeScreenContentSimplified() {
             const ImVec2 backdropSize = scaled({ 350, 350 });
             ImGui::SetCursorPos((ImGui::GetContentRegionAvail() - backdropSize) / 2);
-            ImGui::Image(s_backdropTexture, backdropSize);
+            ImGui::Image(*s_backdropTexture, backdropSize);
 
             ImGuiExt::TextFormattedCentered("hex.builtin.welcome.drop_file"_lang);
         }
@@ -182,30 +288,31 @@ namespace hex::plugin::builtin {
             if (ImGui::BeginTable("Welcome Outer", 1, ImGuiTableFlags_None, ImGui::GetContentRegionAvail() - margin)) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Image(s_bannerTexture, s_bannerTexture.getSize());
-
-                if (ImHexApi::System::isNightlyBuild()) {
-                    auto cursor = ImGui::GetCursorPos();
-
-                    ImGui::SameLine(0);
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 15_scaled);
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5_scaled);
-
-                    ImGui::Image(s_nightlyTexture, s_nightlyTexture.getSize());
-                    ImGuiExt::InfoTooltip("hex.builtin.welcome.nightly_build"_lang);
-
-                    ImGui::SetCursorPos(cursor);
-                }
-
-                ImGui::NewLine();
 
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
                 ON_SCOPE_EXIT { ImGui::PopStyleColor(); };
 
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
                 const auto availableSpace = ImGui::GetContentRegionAvail();
                 if (ImGui::BeginTable("Welcome Left", 1, ImGuiTableFlags_NoBordersInBody, ImVec2(availableSpace.x / 2, 0))) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Image(*s_bannerTexture, s_bannerTexture->getSize());
+
+                    if (ImHexApi::System::isNightlyBuild()) {
+                        auto cursor = ImGui::GetCursorPos();
+
+                        ImGui::SameLine(0);
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 15_scaled);
+                        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5_scaled);
+
+                        ImGui::Image(*s_nightlyTexture, s_nightlyTexture->getSize());
+                        ImGuiExt::InfoTooltip(hex::format("{0}\n\nCommit: {1}@{2}", "hex.builtin.welcome.nightly_build"_lang, ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash(true)).c_str());
+
+                        ImGui::SetCursorPos(cursor);
+                    }
+
+                    ImGui::NewLine();
+
                     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeightWithSpacing() * 6);
                     ImGui::TableNextColumn();
 
@@ -239,7 +346,7 @@ namespace hex::plugin::builtin {
                             ImGui::TextUnformatted(ICON_VS_ARROW_RIGHT);
                             ImGui::SameLine(0, 2_scaled);
 
-                            if (ImGuiExt::BeginSubWindow("hex.builtin.welcome.start.open_other"_lang, nullptr, ImVec2(200_scaled, ImGui::GetTextLineHeightWithSpacing() * 6), ImGuiChildFlags_AutoResizeX)) {
+                            if (ImGuiExt::BeginSubWindow("hex.builtin.welcome.start.open_other"_lang, nullptr, ImVec2(200_scaled, ImGui::GetTextLineHeightWithSpacing() * 5.8), ImGuiChildFlags_AutoResizeX)) {
                                 for (const auto &unlocalizedProviderName : ContentRegistry::Provider::impl::getEntries()) {
                                     if (ImGuiExt::Hyperlink(Lang(unlocalizedProviderName))) {
                                         ImHexApi::Provider::createProvider(unlocalizedProviderName);
@@ -254,7 +361,10 @@ namespace hex::plugin::builtin {
 
                     // Draw recent entries
                     ImGui::Dummy({});
-                    recent::draw();
+
+                    #if !defined(OS_WEB)
+                        recent::draw();
+                    #endif
 
                     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeightWithSpacing() * 6);
                     ImGui::TableNextColumn();
@@ -281,6 +391,12 @@ namespace hex::plugin::builtin {
                 if (ImGui::BeginTable("Welcome Right", 1, ImGuiTableFlags_NoBordersInBody, ImVec2(availableSpace.x / 2, 0))) {
                     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetTextLineHeightWithSpacing() * 5);
                     ImGui::TableNextColumn();
+
+                    ImGui::NewLine();
+                    ImGui::NewLine();
+                    ImGui::NewLine();
+                    ImGui::NewLine();
+                    ImGui::NewLine();
 
                     auto windowPadding = ImGui::GetStyle().WindowPadding.x * 3;
 
@@ -331,7 +447,7 @@ namespace hex::plugin::builtin {
                         ImGuiExt::EndSubWindow();
                     }
 
-                    if (s_infoBannerTexture.isValid()) {
+                    if (s_infoBannerTexture->isValid()) {
                         static bool hovered = false;
 
                         ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Border));
@@ -339,7 +455,7 @@ namespace hex::plugin::builtin {
 
                         if (ImGuiExt::BeginSubWindow("hex.builtin.welcome.header.info"_lang, nullptr, ImVec2(), ImGuiChildFlags_AutoResizeX)) {
                             const auto height = 80_scaled;
-                            ImGui::Image(s_infoBannerTexture, ImVec2(height * s_infoBannerTexture.getAspectRatio(), height));
+                            ImGui::Image(*s_infoBannerTexture, ImVec2(height * s_infoBannerTexture->getAspectRatio(), height));
                             hovered = ImGui::IsItemHovered();
 
                             if (ImGui::IsItemClicked()) {
@@ -364,8 +480,7 @@ namespace hex::plugin::builtin {
             if (ImGuiExt::DimmedIconButton(ICON_VS_CLOSE, ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_ToolbarRed))) {
                 auto provider = ImHexApi::Provider::createProvider("hex.builtin.provider.null");
                 if (provider != nullptr)
-                    if (provider->open())
-                        EventProviderOpened::post(provider);
+                    std::ignore = provider->open();
             }
         }
 
@@ -375,9 +490,9 @@ namespace hex::plugin::builtin {
             if (ImGui::Begin("ImHexDockSpace", nullptr, ImGuiWindowFlags_NoBringToFrontOnFocus)) {
                 if (!ImHexApi::Provider::isValid()) {
                     static auto title = []{
-                        std::array<char, 256> title = {};
-                        ImFormatString(title.data(), title.size(), "%s/DockSpace_%08X", ImGui::GetCurrentWindowRead()->Name, ImGui::GetID("ImHexMainDock"));
-                        return title;
+                        std::array<char, 256> result = {};
+                        ImFormatString(result.data(), result.size(), "%s/DockSpace_%08X", ImGui::GetCurrentWindowRead()->Name, ImGui::GetID("ImHexMainDock"));
+                        return result;
                     }();
 
                     if (ImGui::Begin(title.data(), nullptr, ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus)) {
@@ -401,7 +516,7 @@ namespace hex::plugin::builtin {
                             static bool hovered = false;
                             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hovered ? 1.0F : 0.3F);
                             {
-                                const ImVec2 windowSize = scaled({ 150, 60 });
+                                const ImVec2 windowSize = { 150_scaled, ImGui::GetTextLineHeightWithSpacing() * 3.5F };
                                 ImGui::SetCursorScreenPos(ImGui::GetWindowPos() + ImGui::GetWindowSize() - windowSize - ImGui::GetStyle().WindowPadding);
                                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
                                 if (ImGuiExt::BeginSubWindow("hex.builtin.welcome.header.quick_settings"_lang, nullptr, windowSize, ImGuiChildFlags_AutoResizeY)) {
@@ -452,7 +567,7 @@ namespace hex::plugin::builtin {
                         auto imagePos = (ImGui::GetContentRegionAvail() - imageSize) / 2;
 
                         ImGui::SetCursorPos(imagePos);
-                        ImGui::Image(s_backdropTexture, imageSize);
+                        ImGui::Image(*s_backdropTexture, imageSize);
 
                         auto loadDefaultText = "hex.builtin.layouts.none.restore_default"_lang;
                         auto textSize = ImGui::CalcTextSize(loadDefaultText);
@@ -532,14 +647,14 @@ namespace hex::plugin::builtin {
             s_nightlyTexture = changeTextureSvg(hex::format("assets/{}/nightly.svg", "common"), 35_scaled);
             s_backdropTexture = changeTexture(hex::format("assets/{}/backdrop.png", ThemeManager::getImageTheme()));
 
-            if (!s_bannerTexture.isValid()) {
+            if (!s_bannerTexture->isValid()) {
                 log::error("Failed to load banner texture!");
             }
         });
 
         // Clear project context if we go back to the welcome screen
         EventProviderChanged::subscribe([](const hex::prv::Provider *oldProvider, const hex::prv::Provider *newProvider) {
-            hex::unused(oldProvider);
+            std::ignore = oldProvider;
             if (newProvider == nullptr) {
                 ProjectFile::clearPath();
                 RequestUpdateWindowTitle::post();
@@ -659,15 +774,15 @@ namespace hex::plugin::builtin {
                 if (wolv::io::fs::exists(infoBannerPath)) {
                     s_infoBannerTexture = ImGuiExt::Texture::fromImage(infoBannerPath, ImGuiExt::Texture::Filter::Linear);
 
-                    if (s_infoBannerTexture.isValid())
+                    if (s_infoBannerTexture->isValid())
                         break;
                 }
             }
 
             auto allowNetworking = ContentRegistry::Settings::read<bool>("hex.builtin.setting.general", "hex.builtin.setting.general.network_interface", false)
                 && ContentRegistry::Settings::read<int>("hex.builtin.setting.general", "hex.builtin.setting.general.server_contact", 0) != 0;
-            if (!s_infoBannerTexture.isValid() && allowNetworking) {
-                TaskManager::createBackgroundTask("hex.builtin.task.loading_banner"_lang, [](auto&) {
+            if (!s_infoBannerTexture->isValid() && allowNetworking) {
+                TaskManager::createBackgroundTask("hex.builtin.task.loading_banner", [](auto&) {
                     HttpRequest request("GET",
                         ImHexApiURL + hex::format("/info/{}/image", hex::toLower(ImHexApi::System::getOSName())));
 

@@ -26,12 +26,35 @@
     #include <hex/helpers/utils_linux.hpp>
 #endif
 
-struct ImVec2;
+#include <imgui.h>
 
 namespace hex {
 
     namespace prv {
         class Provider;
+    }
+
+    template<typename T>
+    [[nodiscard]] std::vector<std::vector<T>> sampleChannels(const std::vector<T> &data, size_t count, size_t channels) {
+        if (channels == 0) return {};
+        size_t signalLength = std::max<double>(1.0, double(data.size()) / channels);
+
+        size_t stride = std::max(1.0, double(signalLength) / count);
+
+        std::vector<std::vector<T>> result;
+        result.resize(channels);
+        for (size_t i = 0; i < channels; i++) {
+            result[i].reserve(count);
+        }
+        result.reserve(count);
+
+        for (size_t i = 0; i < data.size(); i += stride) {
+            for (size_t j = 0; j < channels; j++) {
+                result[j].push_back(data[i + j]);
+            }
+        }
+
+        return result;
     }
 
     template<typename T>
@@ -86,13 +109,13 @@ namespace hex {
     [[nodiscard]] std::wstring utf8ToUtf16(const std::string& utf8);
     [[nodiscard]] std::string utf16ToUtf8(const std::wstring& utf16);
 
-    [[nodiscard]] constexpr u64 extract(u8 from, u8 to, const std::unsigned_integral auto &value) {
+    [[nodiscard]] constexpr u64 extract(u8 from, u8 to, const auto &value) {
         if (from < to) std::swap(from, to);
 
         using ValueType = std::remove_cvref_t<decltype(value)>;
         ValueType mask  = (std::numeric_limits<ValueType>::max() >> (((sizeof(value) * 8) - 1) - (from - to))) << to;
 
-        return (value & mask) >> to;
+        return u64((value & mask) >> to);
     }
 
     [[nodiscard]] inline u64 extract(u32 from, u32 to, const std::vector<u8> &bytes) {
@@ -255,20 +278,20 @@ namespace hex {
 
         std::string result;
         for (i16 bit = hex::bit_width(number) - 1; bit >= 0; bit -= 1)
-            result += (number & (0b1 << bit)) == 0 ? '0' : '1';
+            result += (number & (0b1LLU << bit)) == 0 ? '0' : '1';
 
         return result;
     }
 
     [[nodiscard]] float float16ToFloat32(u16 float16);
 
-    [[nodiscard]] inline bool equalsIgnoreCase(const std::string &left, const std::string &right) {
+    [[nodiscard]] inline bool equalsIgnoreCase(std::string_view left, std::string_view right) {
         return std::equal(left.begin(), left.end(), right.begin(), right.end(), [](char a, char b) {
             return tolower(a) == tolower(b);
         });
     }
 
-    [[nodiscard]] inline bool containsIgnoreCase(const std::string &a, const std::string &b) {
+    [[nodiscard]] inline bool containsIgnoreCase(std::string_view a, std::string_view b) {
         auto iter = std::search(a.begin(), a.end(), b.begin(), b.end(), [](char ch1, char ch2) {
             return std::toupper(ch1) == std::toupper(ch2);
         });
@@ -316,5 +339,7 @@ namespace hex {
      *          that is defined in the current module.
      */
     [[nodiscard]] void* getContainingModule(void* symbol);
+
+    [[nodiscard]] std::optional<ImColor> blendColors(const std::optional<ImColor> &a, const std::optional<ImColor> &b);
 
 }

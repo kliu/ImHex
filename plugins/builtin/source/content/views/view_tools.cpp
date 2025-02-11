@@ -4,7 +4,7 @@
 #include <hex/api/content_registry.hpp>
 #include <hex/api/layout_manager.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -90,8 +90,9 @@ namespace hex::plugin::builtin {
                     m_dragStartIterator = tools.end();
 
                     // Attach the newly created window to the cursor, so it gets dragged around
-                    GImGui->MovingWindow = ImGui::GetCurrentWindowRead();
-                    GImGui->ActiveId = GImGui->MovingWindow->MoveId;
+                    auto& g = *ImGui::GetCurrentContext();
+                    g.MovingWindow = ImGui::GetCurrentWindowRead();
+                    g.ActiveId = g.MovingWindow->MoveId;
                 }
 
                 const auto window = ImGui::GetCurrentWindowRead();

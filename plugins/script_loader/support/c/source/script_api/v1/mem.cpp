@@ -87,7 +87,7 @@ public:
 
     void setTypeName(std::string typeName) { m_typeName = std::move(typeName);}
     void setName(std::string name) { m_name = std::move(name);}
-    [[nodiscard]] std::string getTypeName() const override { return m_typeName; }
+    [[nodiscard]] hex::UnlocalizedString getTypeName() const override { return m_typeName; }
     [[nodiscard]] std::string getName() const override { return m_name; }
 
 private:
@@ -102,7 +102,7 @@ SCRIPT_API(void registerProvider, const char *typeName, const char *name, Script
     auto typeNameString = std::string(typeName);
     auto nameString = std::string(name);
 
-    hex::ContentRegistry::Provider::impl::add(typeNameString, [typeNameString, nameString, readFunc, writeFunc, getSizeFunc] -> std::unique_ptr<hex::prv::Provider> {
+    hex::ContentRegistry::Provider::impl::add(typeNameString, [typeNameString, nameString, readFunc, writeFunc, getSizeFunc]() -> std::unique_ptr<hex::prv::Provider> {
         auto provider = std::make_unique<ScriptDataProvider>();
         provider->setTypeName(typeNameString);
         provider->setName(nameString);

@@ -1,4 +1,4 @@
-#include <hex/api/event_manager.hpp>
+#include <hex/api/events/requests_interaction.hpp>
 #include <hex/api/task_manager.hpp>
 #include <hex/helpers/utils.hpp>
 
@@ -27,7 +27,7 @@ namespace hex::init {
 
         // Add initialization tasks to run
         TaskManager::init();
-        for (const auto &[name, task, async] : init::getInitTasks())
+        for (const auto &[name, task, async, running] : init::getInitTasks())
             splashWindow->addStartupTask(name, task, async);
 
         splashWindow->startStartupTasks();

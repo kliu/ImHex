@@ -16,7 +16,7 @@
 #include <filesystem>
 
 #include <imgui.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -207,14 +207,14 @@ namespace hex::plugin::builtin {
 
             m_diskHandle = ::open(path.c_str(), O_RDWR);
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_rw"_lang, path, ::strerror(errno)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_rw"_lang, path, formatSystemError(errno)));
                 log::warn(this->getErrorMessage());
                 m_diskHandle = ::open(path.c_str(), O_RDONLY);
                 m_writable   = false;
             }
 
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_ro"_lang, path, ::strerror(errno)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_ro"_lang, path, formatSystemError(errno)));
                 log::warn(this->getErrorMessage());
                 m_readable = false;
                 return false;
@@ -270,7 +270,7 @@ namespace hex::plugin::builtin {
 
                 std::memcpy(static_cast<u8 *>(buffer) + (offset - startOffset), m_sectorBuffer.data() + (offset & (m_sectorSize - 1)), std::min<u64>(m_sectorSize, size));
 
-                size = std::max<ssize_t>(static_cast<ssize_t>(size) - m_sectorSize, 0);
+                size = std::max<i64>(static_cast<i64>(size) - m_sectorSize, 0);
                 offset += m_sectorSize;
             }
 
